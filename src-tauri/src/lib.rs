@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::runtime::Builder;
 use tokio::sync::oneshot;
 use tokio::task::LocalSet;
+use tauri_plugin_autostart::MacosLauncher;
 use tur_rs::{
     DownloadHandle, DownloadRequest, DownloadStatus, DownloadUpdate, RequestContext,
     ServiceConfig, TurService,
@@ -98,7 +99,7 @@ struct HeaderFieldInput {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StartDownloadInput {
-    url: String,
+    urls: Vec<String>,
     directory: String,
     filename: Option<String>,
     referer: Option<String>,
@@ -110,7 +111,7 @@ struct StartDownloadInput {
 enum ServiceCommand {
     Start {
         input: StartDownloadInput,
-        response_tx: oneshot::Sender<Result<DownloadItem, String>>,
+        response_tx: oneshot::Sender<Result<Vec<DownloadItem>, String>>,
     },
     Pause {
         id: String,
@@ -183,7 +184,7 @@ impl AppState {
 async fn start_download(
     state: State<'_, AppState>,
     input: StartDownloadInput,
-) -> Result<DownloadItem, String> {
+) -> Result<Vec<DownloadItem>, String> {
     let (response_tx, response_rx) = oneshot::channel();
     state
         .command_tx
@@ -218,6 +219,13 @@ fn list_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadItem>, Strin
     let mut rows = snapshots.values().cloned().collect::<Vec<_>>();
     rows.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
     Ok(rows)
+}
+
+#[tauri::command]
+fn import_download_links(path: String) -> Result<Vec<String>, String> {
+    let contents =
+        std::fs::read_to_string(&path).map_err(|err| format!("failed to read link file: {err}"))?;
+    Ok(parse_download_links(&contents))
 }
 
 #[derive(Clone, Copy)]
@@ -329,9 +337,9 @@ async fn start_download_inner(
     snapshots: &Arc<Mutex<HashMap<String, DownloadItem>>>,
     app: &AppHandle,
     input: StartDownloadInput,
-) -> Result<DownloadItem, String> {
+) -> Result<Vec<DownloadItem>, String> {
     let StartDownloadInput {
-        url,
+        urls,
         directory,
         filename,
         referer,
@@ -340,10 +348,15 @@ async fn start_download_inner(
         headers,
     } = input;
 
-    let mut request = DownloadRequest::new(url.clone()).dir(PathBuf::from(&directory));
-    if let Some(name) = filename.clone().filter(|value| !value.trim().is_empty()) {
-        request = request.filename(name);
+    let urls = urls
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if urls.is_empty() {
+        return Err("provide at least one valid URL".into());
     }
+    let single_url = urls.len() == 1;
 
     let mut context = RequestContext::new();
     let mut has_context = false;
@@ -375,33 +388,46 @@ async fn start_download_inner(
             .map_err(|err| format!("failed to import cookie file: {err}"))?;
     }
 
-    if has_context {
-        request = request.context(context);
+    let mut started = Vec::with_capacity(urls.len());
+
+    for url in urls {
+        let mut request = DownloadRequest::new(url.clone()).dir(PathBuf::from(&directory));
+        if let Some(name) = filename
+            .clone()
+            .filter(|value| !value.trim().is_empty() && single_url)
+        {
+            request = request.filename(name);
+        }
+        if has_context {
+            request = request.context(context.clone());
+        }
+
+        let handle = service
+            .add_download(request)
+            .await
+            .map_err(|err| format!("failed to start download: {err}"))?;
+
+        let id = handle.id.to_string();
+        let row = DownloadItem::new(
+            id.clone(),
+            url.clone(),
+            filename
+                .clone()
+                .filter(|value| !value.trim().is_empty() && single_url)
+                .unwrap_or_else(|| derive_filename(&url)),
+            directory.clone(),
+        );
+
+        handles.insert(id.clone(), handle);
+        snapshots
+            .lock()
+            .map_err(|_| "download state is poisoned".to_string())?
+            .insert(id.clone(), row.clone());
+        let _ = app.emit(DOWNLOAD_EVENT, row.clone());
+        started.push(row);
     }
 
-    let handle = service
-        .add_download(request)
-        .await
-        .map_err(|err| format!("failed to start download: {err}"))?;
-
-    let id = handle.id.to_string();
-    let row = DownloadItem::new(
-        id.clone(),
-        url.clone(),
-        filename
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or_else(|| derive_filename(&url)),
-        directory,
-    );
-
-    handles.insert(id.clone(), handle);
-    snapshots
-        .lock()
-        .map_err(|_| "download state is poisoned".to_string())?
-        .insert(id.clone(), row.clone());
-    let _ = app.emit(DOWNLOAD_EVENT, row.clone());
-
-    Ok(row)
+    Ok(started)
 }
 
 fn poll_updates(
@@ -461,6 +487,15 @@ fn derive_filename(url: &str) -> String {
         .to_string()
 }
 
+fn parse_download_links(contents: &str) -> Vec<String> {
+    contents
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#') && !line.starts_with("//"))
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 fn status_parts(status: &DownloadStatus) -> (&'static str, Option<String>) {
     match status {
         DownloadStatus::Queued => ("queued", None),
@@ -490,12 +525,25 @@ pub fn run() {
             app.manage(state);
             Ok(())
         })
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
+        .plugin(tauri_plugin_autostart::init(
+            MacosLauncher::LaunchAgent,
+            None::<Vec<&'static str>>,
+        ))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .invoke_handler(tauri::generate_handler![
             start_download,
+            import_download_links,
             pause_download,
             resume_download,
             cancel_download,

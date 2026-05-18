@@ -3,6 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
+  disable as disableAutostart,
+  enable as enableAutostart,
+  isEnabled as isAutostartEnabled,
+} from "@tauri-apps/plugin-autostart";
+import {
   isPermissionGranted,
   requestPermission,
   sendNotification,
@@ -99,7 +104,7 @@ async function notificationPermissionGranted(): Promise<boolean> {
 
 function App() {
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
-  const [url, setUrl] = useState("");
+  const [urlText, setUrlText] = useState("");
   const [directory, setDirectory] = useState("");
   const [filename, setFilename] = useState("");
   const [referer, setReferer] = useState("");
@@ -110,6 +115,8 @@ function App() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pageError, setPageError] = useState<string | null>(null);
   const [storeReady, setStoreReady] = useState(false);
+  const [autostartEnabled, setAutostartEnabled] = useState(false);
+  const [isTogglingAutostart, setIsTogglingAutostart] = useState(false);
   const storeRef = useRef<Store | null>(null);
   const lastStatusRef = useRef<Record<string, DownloadStatus>>({});
 
@@ -126,6 +133,10 @@ function App() {
         const savedDir = await store.get<string>(STORE_KEY_DOWNLOAD_DIR);
         if (mounted && savedDir) {
           setDirectory(savedDir);
+        }
+
+        if (mounted) {
+          setAutostartEnabled(await isAutostartEnabled());
         }
 
         const rows = await invoke<DownloadItem[]>("list_downloads");
@@ -216,10 +227,58 @@ function App() {
     }
   }
 
+  async function handleImportLinksFile() {
+    const selected = await open({
+      directory: false,
+      multiple: false,
+      title: "Choose a file containing download links",
+      defaultPath: directory || undefined,
+    });
+    if (typeof selected !== "string" || !selected.length) {
+      return;
+    }
+    try {
+      const links = await invoke<string[]>("import_download_links", { path: selected });
+      if (links.length === 0) {
+        setPageError("The selected file did not contain any usable links.");
+        return;
+      }
+      setUrlText((current) => {
+        const merged = [...new Set([...current.split("\n").map((value) => value.trim()).filter(Boolean), ...links])];
+        return merged.join("\n");
+      });
+      setPageError(null);
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function handleAutostartToggle() {
+    setIsTogglingAutostart(true);
+    setPageError(null);
+    try {
+      if (autostartEnabled) {
+        await disableAutostart();
+        setAutostartEnabled(false);
+      } else {
+        await enableAutostart();
+        setAutostartEnabled(true);
+      }
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsTogglingAutostart(false);
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!url.trim()) {
-      setPageError("Enter a direct download URL first.");
+    const urls = urlText
+      .split("\n")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    if (urls.length === 0) {
+      setPageError("Enter at least one direct download URL first.");
       return;
     }
     if (!directory.trim()) {
@@ -231,9 +290,9 @@ function App() {
     setPageError(null);
 
     try {
-      const row = await invoke<DownloadItem>("start_download", {
+      const rows = await invoke<DownloadItem[]>("start_download", {
         input: {
-          url: url.trim(),
+          urls,
           directory: directory.trim(),
           filename: filename.trim() || null,
           referer: referer.trim() || null,
@@ -243,9 +302,15 @@ function App() {
         },
       });
 
-      setDownloads((current) => [row, ...current.filter((item) => item.id !== row.id)]);
+      setDownloads((current) => {
+        const nextMap = new Map(current.map((item) => [item.id, item]));
+        for (const row of rows) {
+          nextMap.set(row.id, row);
+        }
+        return [...nextMap.values()].sort((a, b) => b.createdAtMs - a.createdAtMs);
+      });
       await persistDirectory(directory.trim());
-      setUrl("");
+      setUrlText("");
       setFilename("");
       setReferer("");
       setBearerToken("");
@@ -273,7 +338,7 @@ function App() {
       <div className="mx-auto flex max-w-7xl flex-col gap-8">
         <header className="flex flex-col gap-5 rounded-[2rem] border border-white/10 bg-white/5 p-8 shadow-[0_25px_90px_rgba(0,0,0,0.35)] backdrop-blur">
           <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-            <div className="space-y-3">
+              <div className="space-y-3">
               <div className="inline-flex w-fit items-center gap-2 rounded-full border border-orange-300/15 bg-orange-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-orange-100">
                 Tur desktop
               </div>
@@ -286,6 +351,19 @@ function App() {
                   This MVP binds directly to <code className="rounded bg-black/25 px-1.5 py-0.5 text-orange-200">tur-rs</code>.
                   The GUI stays thin; the downloader core stays authoritative.
                 </p>
+                <div className="flex flex-wrap items-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={handleAutostartToggle}
+                    disabled={isTogglingAutostart}
+                    className="rounded-full border border-white/12 bg-black/20 px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:border-orange-300/35 hover:bg-orange-500/10 disabled:opacity-50"
+                  >
+                    {autostartEnabled ? "Autostart on" : "Autostart off"}
+                  </button>
+                  <span className="text-xs uppercase tracking-[0.18em] text-stone-500">
+                    Single-instance mode is active.
+                  </span>
+                </div>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3 md:min-w-[19rem]">
@@ -308,13 +386,26 @@ function App() {
             </div>
 
             <div className="mt-6 space-y-5">
-              <Field label="Download URL">
-                <input
-                  value={url}
-                  onChange={(event) => setUrl(event.currentTarget.value)}
-                  placeholder="https://example.com/file.zip"
+              <Field label="Download URLs">
+                <textarea
+                  value={urlText}
+                  onChange={(event) => setUrlText(event.currentTarget.value)}
+                  placeholder={"https://example.com/file.zip\nhttps://example.com/file-2.iso"}
+                  rows={5}
                   className="w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-white outline-none transition focus:border-orange-300/60 focus:bg-white/8"
                 />
+                <div className="mt-3 flex flex-wrap gap-3">
+                  <button
+                    type="button"
+                    onClick={handleImportLinksFile}
+                    className="rounded-2xl border border-white/12 bg-white/8 px-4 py-3 text-sm font-medium text-white transition hover:border-orange-300/40 hover:bg-orange-400/12"
+                  >
+                    Import link list
+                  </button>
+                  <p className="self-center text-xs uppercase tracking-[0.16em] text-stone-500">
+                    One URL per line.
+                  </p>
+                </div>
               </Field>
 
               <Field label="Destination folder">
@@ -441,7 +532,7 @@ function App() {
                 <div className="rounded-[1.75rem] border border-dashed border-white/12 bg-black/10 px-6 py-14 text-center">
                   <p className="text-lg font-semibold text-white">No transfers yet.</p>
                   <p className="mt-2 text-sm text-stone-400">
-                    Add a URL on the left, choose a destination, and Tur will start the engine through <code className="rounded bg-black/20 px-1.5 py-0.5 text-orange-200">tur-rs</code>.
+                    Add one or more URLs on the left, choose a destination, and Tur will start the engine through <code className="rounded bg-black/20 px-1.5 py-0.5 text-orange-200">tur-rs</code>.
                   </p>
                 </div>
               ) : (
