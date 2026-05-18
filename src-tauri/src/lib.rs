@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 use tokio::task::LocalSet;
 use tauri_plugin_autostart::MacosLauncher;
 use tur_rs::{
-    DownloadHandle, DownloadRequest, DownloadStatus, DownloadUpdate, RequestContext,
+    CookieEntry, DownloadHandle, DownloadRequest, DownloadStatus, DownloadUpdate, RequestContext,
     ServiceConfig, TurService,
 };
 
@@ -382,10 +382,13 @@ async fn start_download_inner(
         .map(PathBuf::from)
         .filter(|value| !value.as_os_str().is_empty())
     {
-        service
-            .import_cookie_file(&path)
-            .await
-            .map_err(|err| format!("failed to import cookie file: {err}"))?;
+        let default_url = urls.first().map(String::as_str);
+        let cookie_entries = parse_cookie_file(&path, default_url)
+            .map_err(|err| format!("failed to parse cookie file: {err}"))?;
+        if !cookie_entries.is_empty() {
+            context = context.cookies(cookie_entries);
+            has_context = true;
+        }
     }
 
     let mut started = Vec::with_capacity(urls.len());
@@ -507,6 +510,52 @@ fn status_parts(status: &DownloadStatus) -> (&'static str, Option<String>) {
     }
 }
 
+
+fn parse_cookie_file(path: &PathBuf, default_url: Option<&str>) -> Result<Vec<CookieEntry>, String> {
+    let contents = std::fs::read_to_string(path)
+        .map_err(|e| format!("failed to read cookie file: {e}"))?;
+
+    let default_domain = default_url
+        .and_then(|u| url::Url::parse(u).ok())
+        .and_then(|u| u.host_str().map(String::from))
+        .unwrap_or_default();
+
+    let mut cookies = Vec::new();
+
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with("#") || line.starts_with("//") {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split("\t").collect();
+        if parts.len() >= 7 {
+            // Netscape cookie file format
+            let domain = parts[0].strip_prefix(".").unwrap_or(parts[0]);
+            let path = parts[2];
+            let secure = parts[3] == "TRUE";
+            let expires = parts[4];
+            let name = parts[5];
+            let value = parts[6];
+            let mut entry = CookieEntry::new(name, value, domain);
+            entry.path = path.to_string();
+            entry.secure = secure;
+            if !expires.is_empty() && expires != "0" {
+                entry.expires = Some(expires.to_string());
+            }
+            cookies.push(entry);
+        } else if let Some(eq_pos) = line.find("=") {
+            // Simple name=value format
+            let name = line[..eq_pos].trim();
+            let value = line[eq_pos + 1..].trim();
+            if !name.is_empty() {
+                cookies.push(CookieEntry::new(name, value, default_domain.as_str()));
+            }
+        }
+    }
+
+    Ok(cookies)
+}
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

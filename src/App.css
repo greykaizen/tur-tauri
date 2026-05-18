@@ -27,3 +27,50 @@ body,
 body {
   margin: 0;
 }
+
+/* Shimmer animation for active download progress bars */
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.animate-shimmer {
+  animation: shimmer 2s ease-in-out infinite;
+}
+
+/* Smooth transitions for card interactions */
+article {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+article:hover {
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+/* Subtle focus ring for inputs */
+input:focus,
+textarea:focus {
+  outline: none;
+}
+
+/* Scrollbar styling for the main content area */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
