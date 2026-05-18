@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "tur-tauri",
+  "productName": "Tur",
   "version": "0.1.0",
   "identifier": "com.greykaizen.tur",
   "build": {
@@ -12,9 +12,12 @@
   "app": {
     "windows": [
       {
-        "title": "tur-tauri",
-        "width": 800,
-        "height": 600
+        "title": "Tur",
+        "width": 1320,
+        "height": 860,
+        "minWidth": 1100,
+        "minHeight": 720,
+        "resizable": true
       }
     ],
     "security": {
