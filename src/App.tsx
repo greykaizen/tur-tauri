@@ -52,6 +52,7 @@ type DownloadItem = {
   speedBps: number;
   progress: number;
   status: DownloadStatus;
+  protocol: "auto" | "http1" | "http2" | "http3";
   errorMessage?: string | null;
   createdAtMs: number;
   workerSnapshots: WorkerSnapshot[];
@@ -153,6 +154,19 @@ function formatWorkerRange(worker: WorkerSnapshot): string {
   }
   const mb = (value: number) => `${(value / (1024 * 1024)).toFixed(1)}MB`;
   return `${mb(worker.rangeStart)} → ${mb(worker.rangeCursor)} / ${mb(worker.rangeEnd)}`;
+}
+
+function formatProtocol(protocol: DownloadItem["protocol"]): string {
+  switch (protocol) {
+    case "http1":
+      return "HTTP/1.1";
+    case "http2":
+      return "HTTP/2";
+    case "http3":
+      return "HTTP/3";
+    default:
+      return "Auto";
+  }
 }
 
 function parseHeaders(input: string): HeaderField[] {
@@ -1004,6 +1018,8 @@ function DownloadCard({
           </div>
           <p className="truncate text-xs text-stone-500">{download.url}</p>
           <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-stone-500">
+            <span>{formatProtocol(download.protocol)}</span>
+            <span>·</span>
             <span>{activeConnections} active conn</span>
             <span>·</span>
             <span>{download.workerSnapshots.length} tracked</span>
@@ -1120,6 +1136,7 @@ function DownloadCard({
         </div>
         <div className="mt-2 grid grid-cols-2 gap-2">
           <Metric label="Received" value={formatBytes(download.downloadedBytes)} />
+          <Metric label="Protocol" value={formatProtocol(download.protocol)} />
           <Metric label="ID" value={download.id.slice(0, 8)} mono />
         </div>
         {download.workerSnapshots.length > 0 ? (

@@ -11,7 +11,7 @@ use tokio::task::LocalSet;
 use tauri_plugin_autostart::MacosLauncher;
 use tur_rs::{
     CookieEntry, DownloadHandle, DownloadRequest, DownloadStatus, DownloadUpdate, RequestContext,
-    ServiceConfig, TurService, WorkerSnapshot,
+    ProtocolFamily, ServiceConfig, TurService, WorkerSnapshot,
 };
 
 const DOWNLOAD_EVENT: &str = "download-update";
@@ -28,6 +28,7 @@ struct DownloadItem {
     speed_bps: f64,
     progress: f64,
     status: String,
+    protocol: String,
     error_message: Option<String>,
     created_at_ms: u64,
     worker_snapshots: Vec<WorkerSnapshot>,
@@ -45,6 +46,7 @@ impl DownloadItem {
             speed_bps: 0.0,
             progress: 0.0,
             status: "queued".into(),
+            protocol: "auto".into(),
             error_message: None,
             created_at_ms: now_ms(),
             worker_snapshots: Vec::new(),
@@ -74,6 +76,15 @@ impl DownloadItem {
             }
             DownloadUpdate::Workers(workers) => {
                 self.worker_snapshots = workers.clone();
+            }
+            DownloadUpdate::Protocol(protocol) => {
+                self.protocol = match protocol {
+                    ProtocolFamily::Http1 => "http1",
+                    ProtocolFamily::Http2 => "http2",
+                    ProtocolFamily::Http3 => "http3",
+                    ProtocolFamily::Other => "auto",
+                }
+                .into();
             }
             DownloadUpdate::StatusChanged(status) => {
                 let (label, message) = status_parts(status);
