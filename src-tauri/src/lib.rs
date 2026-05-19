@@ -11,7 +11,7 @@ use tokio::task::LocalSet;
 use tauri_plugin_autostart::MacosLauncher;
 use tur_rs::{
     CookieEntry, DownloadHandle, DownloadRequest, DownloadStatus, DownloadUpdate, RequestContext,
-    ServiceConfig, TurService,
+    ServiceConfig, TurService, WorkerSnapshot,
 };
 
 const DOWNLOAD_EVENT: &str = "download-update";
@@ -30,6 +30,7 @@ struct DownloadItem {
     status: String,
     error_message: Option<String>,
     created_at_ms: u64,
+    worker_snapshots: Vec<WorkerSnapshot>,
 }
 
 impl DownloadItem {
@@ -46,6 +47,7 @@ impl DownloadItem {
             status: "queued".into(),
             error_message: None,
             created_at_ms: now_ms(),
+            worker_snapshots: Vec::new(),
         }
     }
 
@@ -69,6 +71,9 @@ impl DownloadItem {
                     self.progress =
                         (self.downloaded_bytes as f64 / self.total_size as f64).clamp(0.0, 1.0);
                 }
+            }
+            DownloadUpdate::Workers(workers) => {
+                self.worker_snapshots = workers.clone();
             }
             DownloadUpdate::StatusChanged(status) => {
                 let (label, message) = status_parts(status);

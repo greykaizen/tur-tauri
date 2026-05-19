@@ -22,6 +22,26 @@ type DownloadStatus =
   | "completed"
   | "error";
 
+type WorkerState =
+  | "connecting"
+  | "waiting_for_work"
+  | "downloading"
+  | "retrying"
+  | "paused"
+  | "stopped"
+  | "finished";
+
+type WorkerSnapshot = {
+  connectionId: number;
+  state: WorkerState;
+  transferredBytes: number;
+  speedBps: number;
+  rangeStart?: number | null;
+  rangeEnd?: number | null;
+  rangeCursor?: number | null;
+  detail?: string | null;
+};
+
 type DownloadItem = {
   id: string;
   url: string;
@@ -34,6 +54,7 @@ type DownloadItem = {
   status: DownloadStatus;
   errorMessage?: string | null;
   createdAtMs: number;
+  workerSnapshots: WorkerSnapshot[];
 };
 
 type ActionName = "pause" | "resume" | "cancel";
@@ -108,6 +129,30 @@ function formatRemaining(download: DownloadItem): string {
     return "—";
   }
   return formatBytes(Math.max(download.totalSize - download.downloadedBytes, 0));
+}
+
+function formatWorkerState(state: WorkerState): string {
+  switch (state) {
+    case "waiting_for_work":
+      return "Waiting";
+    default:
+      return state.charAt(0).toUpperCase() + state.slice(1);
+  }
+}
+
+function formatWorkerRange(worker: WorkerSnapshot): string {
+  if (
+    worker.rangeStart === undefined ||
+    worker.rangeStart === null ||
+    worker.rangeCursor === undefined ||
+    worker.rangeCursor === null ||
+    worker.rangeEnd === undefined ||
+    worker.rangeEnd === null
+  ) {
+    return "—";
+  }
+  const mb = (value: number) => `${(value / (1024 * 1024)).toFixed(1)}MB`;
+  return `${mb(worker.rangeStart)} → ${mb(worker.rangeCursor)} / ${mb(worker.rangeEnd)}`;
 }
 
 function parseHeaders(input: string): HeaderField[] {
@@ -198,6 +243,7 @@ function App() {
   const [isTogglingAutostart, setIsTogglingAutostart] = useState(false);
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
   const [pendingActions, setPendingActions] = useState<Record<string, ActionName | undefined>>({});
+  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const storeRef = useRef<Store | null>(null);
   const lastStatusRef = useRef<Record<string, DownloadStatus>>({});
 
@@ -502,6 +548,10 @@ function App() {
     }
   }
 
+  function toggleRowExpansion(id: string) {
+    setExpandedRows((current) => ({ ...current, [id]: !current[id] }));
+  }
+
   // Notify helper
 
   async function notifyStatusChange(download: DownloadItem) {
@@ -782,9 +832,11 @@ function App() {
                   <DownloadCard
                     key={download.id}
                     download={download}
+                    expanded={Boolean(expandedRows[download.id])}
                     pendingAction={pendingActions[download.id]}
                     onAction={handleAction}
                     onRetry={handleRetry}
+                    onToggleExpanded={toggleRowExpansion}
                   />
                 ))
               )}
@@ -902,18 +954,25 @@ function EmptyState() {
 
 function DownloadCard({
   download,
+  expanded,
   pendingAction,
   onAction,
   onRetry,
+  onToggleExpanded,
 }: {
   download: DownloadItem;
+  expanded: boolean;
   pendingAction?: ActionName;
   onAction: (action: ActionName, id: string) => void;
   onRetry: (download: DownloadItem) => void;
+  onToggleExpanded: (id: string) => void;
 }) {
   const colors = STATUS_COLORS[download.status];
   const isTerminal = download.status === "completed" || download.status === "error";
   const isActive = download.status === "downloading";
+  const activeConnections = download.workerSnapshots.filter((worker) =>
+    ["connecting", "waiting_for_work", "downloading", "retrying"].includes(worker.state),
+  ).length;
 
   return (
     <article
@@ -944,6 +1003,11 @@ function DownloadCard({
             </span>
           </div>
           <p className="truncate text-xs text-stone-500">{download.url}</p>
+          <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-stone-500">
+            <span>{activeConnections} active conn</span>
+            <span>·</span>
+            <span>{download.workerSnapshots.length} tracked</span>
+          </div>
         </div>
 
         {/* Actions (non-terminal) */}
@@ -1058,7 +1122,48 @@ function DownloadCard({
           <Metric label="Received" value={formatBytes(download.downloadedBytes)} />
           <Metric label="ID" value={download.id.slice(0, 8)} mono />
         </div>
+        {download.workerSnapshots.length > 0 ? (
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={() => onToggleExpanded(download.id)}
+              className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/6 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-300 transition hover:border-orange-300/30 hover:bg-orange-400/10 hover:text-white"
+            >
+              {expanded ? "Hide connections" : "Show connections"}
+            </button>
+          </div>
+        ) : null}
       </div>
+
+      {expanded && download.workerSnapshots.length > 0 ? (
+        <div className="border-t border-white/6 px-4 py-4">
+          <div className="space-y-2">
+            {download.workerSnapshots.map((worker) => (
+              <div
+                key={`${download.id}-${worker.connectionId}`}
+                className="rounded-xl border border-white/8 bg-black/20 px-3.5 py-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-md bg-white/8 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-stone-200">
+                      Conn {worker.connectionId}
+                    </span>
+                    <span className="rounded-md bg-sky-500/10 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-sky-200">
+                      {formatWorkerState(worker.state)}
+                    </span>
+                  </div>
+                  <span className="text-xs text-stone-400">{formatSpeed(worker.speedBps)}</span>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                  <Metric label="Transferred" value={formatBytes(worker.transferredBytes)} />
+                  <Metric label="Range" value={formatWorkerRange(worker)} mono />
+                  <Metric label="Detail" value={worker.detail || "—"} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {/* Error message */}
       {download.errorMessage ? (
