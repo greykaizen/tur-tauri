@@ -132,30 +132,6 @@ function formatRemaining(download: DownloadItem): string {
   return formatBytes(Math.max(download.totalSize - download.downloadedBytes, 0));
 }
 
-function formatWorkerState(state: WorkerState): string {
-  switch (state) {
-    case "waiting_for_work":
-      return "Waiting";
-    default:
-      return state.charAt(0).toUpperCase() + state.slice(1);
-  }
-}
-
-function formatWorkerRange(worker: WorkerSnapshot): string {
-  if (
-    worker.rangeStart === undefined ||
-    worker.rangeStart === null ||
-    worker.rangeCursor === undefined ||
-    worker.rangeCursor === null ||
-    worker.rangeEnd === undefined ||
-    worker.rangeEnd === null
-  ) {
-    return "—";
-  }
-  const mb = (value: number) => `${(value / (1024 * 1024)).toFixed(1)}MB`;
-  return `${mb(worker.rangeStart)} → ${mb(worker.rangeCursor)} / ${mb(worker.rangeEnd)}`;
-}
-
 function formatProtocol(protocol: DownloadItem["protocol"]): string {
   switch (protocol) {
     case "http1":
@@ -255,11 +231,28 @@ function App() {
   const [storeReady, setStoreReady] = useState(false);
   const [autostartEnabled, setAutostartEnabled] = useState(false);
   const [isTogglingAutostart, setIsTogglingAutostart] = useState(false);
+  const [isDarkTheme, setIsDarkTheme] = useState(() => {
+    const stored = localStorage.getItem("tur-theme");
+    if (stored) return stored === "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  });
   const [filterMode, setFilterMode] = useState<FilterMode>("all");
   const [pendingActions, setPendingActions] = useState<Record<string, ActionName | undefined>>({});
-  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+
   const storeRef = useRef<Store | null>(null);
   const lastStatusRef = useRef<Record<string, DownloadStatus>>({});
+
+  // Sync theme class on document
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (isDarkTheme) {
+      root.classList.remove("light");
+    } else {
+      root.classList.add("light");
+    }
+    localStorage.setItem("tur-theme", isDarkTheme ? "dark" : "light");
+  }, [isDarkTheme]);
 
   // Bootstrap
 
@@ -308,6 +301,17 @@ function App() {
           lastStatusRef.current[next.id] = next.status;
         });
 
+        const unlistenFocus = await listen("focus-add-download", () => {
+          if (mounted) {
+            const addForm = document.getElementById("add-download-form");
+            if (addForm) {
+              addForm.scrollIntoView({ behavior: "smooth", block: "start" });
+              const textarea = addForm.querySelector("textarea");
+              if (textarea) textarea.focus();
+            }
+          }
+        });
+
         if (mounted) {
           setStoreReady(true);
         }
@@ -315,6 +319,7 @@ function App() {
         return () => {
           mounted = false;
           void unlisten();
+          void unlistenFocus();
         };
       } catch (error) {
         if (mounted) {
@@ -562,9 +567,58 @@ function App() {
     }
   }
 
-  function toggleRowExpansion(id: string) {
-    setExpandedRows((current) => ({ ...current, [id]: !current[id] }));
+  async function handleRemove(id: string) {
+    setPageError(null);
+    try {
+      await invoke("remove_download", { id });
+      setDownloads((current) => current.filter((item) => item.id !== id));
+
+      setPendingActions((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : String(error));
+    }
   }
+
+  async function handleClearCompleted() {
+    setPageError(null);
+    try {
+      await invoke("clear_completed");
+      setDownloads((current) =>
+        current.filter(
+          (item) =>
+            item.status !== "completed" &&
+            item.status !== "error" &&
+            item.status !== "stopped",
+        ),
+      );
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function openInstanceWindow(taskId: string) {
+    setPageError(null);
+    try {
+      await invoke("open_instance_window", { taskId });
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function handleOpenFolder(path: string) {
+    setPageError(null);
+    try {
+      await invoke("open_download_folder", { path });
+    } catch (error) {
+      setPageError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+
 
   // Notify helper
 
@@ -625,9 +679,26 @@ function App() {
             >
               {autostartEnabled ? "⏻ Autostart on" : "Autostart off"}
             </button>
+            <button
+              type="button"
+              onClick={() => setIsDarkTheme((value) => !value)}
+              className="rounded-full border border-white/12 bg-black/20 px-3.5 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-white transition hover:border-orange-300/35 hover:bg-orange-500/10"
+            >
+              {isDarkTheme ? "☀ Light" : "🌙 Dark"}
+            </button>
             <span className="text-[11px] uppercase tracking-[0.16em] text-stone-500">
               Single-instance &middot; {downloads.length} task{downloads.length !== 1 ? "s" : ""}
             </span>
+            <button
+              type="button"
+              onClick={handleClearCompleted}
+              disabled={!downloads.some((item) =>
+                item.status === "completed" || item.status === "error" || item.status === "stopped",
+              )}
+              className="rounded-full border border-white/12 bg-black/20 px-3.5 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-white transition hover:border-orange-300/35 hover:bg-orange-500/10 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Clear finished
+            </button>
           </div>
         </header>
 
@@ -635,6 +706,7 @@ function App() {
         <div className="grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
           {/* Left: Add form */}
           <form
+            id="add-download-form"
             onSubmit={handleSubmit}
             className="flex h-fit flex-col rounded-[1.75rem] border border-white/10 bg-stone-950/65 p-6 shadow-[0_25px_60px_rgba(0,0,0,0.28)]"
           >
@@ -846,11 +918,12 @@ function App() {
                   <DownloadCard
                     key={download.id}
                     download={download}
-                    expanded={Boolean(expandedRows[download.id])}
                     pendingAction={pendingActions[download.id]}
                     onAction={handleAction}
+                    onRemove={handleRemove}
                     onRetry={handleRetry}
-                    onToggleExpanded={toggleRowExpansion}
+                    onOpenFolder={handleOpenFolder}
+                    onOpenInstanceWindow={openInstanceWindow}
                   />
                 ))
               )}
@@ -968,18 +1041,20 @@ function EmptyState() {
 
 function DownloadCard({
   download,
-  expanded,
   pendingAction,
   onAction,
+  onRemove,
   onRetry,
-  onToggleExpanded,
+  onOpenFolder,
+  onOpenInstanceWindow,
 }: {
   download: DownloadItem;
-  expanded: boolean;
   pendingAction?: ActionName;
   onAction: (action: ActionName, id: string) => void;
+  onRemove: (id: string) => void;
   onRetry: (download: DownloadItem) => void;
-  onToggleExpanded: (id: string) => void;
+  onOpenFolder: (path: string) => void;
+  onOpenInstanceWindow: (id: string) => void;
 }) {
   const colors = STATUS_COLORS[download.status];
   const isTerminal = download.status === "completed" || download.status === "error";
@@ -1058,15 +1133,18 @@ function DownloadCard({
           </div>
         ) : (
           <div className="flex shrink-0 gap-1.5">
+            <ActionButton
+              label="Folder"
+              variant="ghost"
+              onClick={() => onOpenFolder(download.directory)}
+            />
             {download.status === "error" ? (
               <ActionButton label="Retry" onClick={() => onRetry(download)} />
             ) : null}
             <ActionButton
               label="Clear"
               variant="ghost"
-              onClick={() => {
-                // no-op for now
-              }}
+              onClick={() => onRemove(download.id)}
             />
           </div>
         )}
@@ -1143,44 +1221,14 @@ function DownloadCard({
           <div className="mt-3">
             <button
               type="button"
-              onClick={() => onToggleExpanded(download.id)}
+              onClick={() => onOpenInstanceWindow(download.id)}
               className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/6 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-stone-300 transition hover:border-orange-300/30 hover:bg-orange-400/10 hover:text-white"
             >
-              {expanded ? "Hide connections" : "Show connections"}
+              Open Details ▸
             </button>
           </div>
         ) : null}
       </div>
-
-      {expanded && download.workerSnapshots.length > 0 ? (
-        <div className="border-t border-white/6 px-4 py-4">
-          <div className="space-y-2">
-            {download.workerSnapshots.map((worker) => (
-              <div
-                key={`${download.id}-${worker.connectionId}`}
-                className="rounded-xl border border-white/8 bg-black/20 px-3.5 py-3"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-md bg-white/8 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-stone-200">
-                      Conn {worker.connectionId}
-                    </span>
-                    <span className="rounded-md bg-sky-500/10 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.14em] text-sky-200">
-                      {formatWorkerState(worker.state)}
-                    </span>
-                  </div>
-                  <span className="text-xs text-stone-400">{formatSpeed(worker.speedBps)}</span>
-                </div>
-                <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                  <Metric label="Transferred" value={formatBytes(worker.transferredBytes)} />
-                  <Metric label="Range" value={formatWorkerRange(worker)} mono />
-                  <Metric label="Detail" value={worker.detail || "—"} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      ) : null}
 
       {/* Error message */}
       {download.errorMessage ? (

@@ -4,19 +4,22 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use tokio::runtime::Builder;
 use tokio::sync::oneshot;
 use tokio::task::LocalSet;
 use tauri_plugin_autostart::MacosLauncher;
 use tur_rs::{
-    CookieEntry, DownloadHandle, DownloadRequest, DownloadStatus, DownloadUpdate, RequestContext,
-    ProtocolFamily, ServiceConfig, TurService, WorkerSnapshot,
+    CookieEntry, DownloadHandle, DownloadRequest, DownloadStatus, DownloadUpdate, RequestContext, ServiceConfig, TurService, WorkerSnapshot,
 };
 
 const DOWNLOAD_EVENT: &str = "download-update";
 
-#[derive(Debug, Clone, serde::Serialize)]
+const SNAPSHOT_FILE_NAME: &str = "downloads-state.json";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DownloadItem {
     id: String,
@@ -77,14 +80,8 @@ impl DownloadItem {
             DownloadUpdate::Workers(workers) => {
                 self.worker_snapshots = workers.clone();
             }
-            DownloadUpdate::Protocol(protocol) => {
-                self.protocol = match protocol {
-                    ProtocolFamily::Http1 => "http1",
-                    ProtocolFamily::Http2 => "http2",
-                    ProtocolFamily::Http3 => "http3",
-                    ProtocolFamily::Other => "auto",
-                }
-                .into();
+            DownloadUpdate::Protocol(info) => {
+                self.protocol = info.display_label();
             }
             DownloadUpdate::StatusChanged(status) => {
                 let (label, message) = status_parts(status);
@@ -141,20 +138,31 @@ enum ServiceCommand {
         id: String,
         response_tx: oneshot::Sender<Result<(), String>>,
     },
+    Remove {
+        id: String,
+        response_tx: oneshot::Sender<Result<(), String>>,
+    },
+    Retry {
+        id: String,
+        response_tx: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 #[derive(Clone)]
 struct AppState {
     command_tx: mpsc::Sender<ServiceCommand>,
     snapshots: Arc<Mutex<HashMap<String, DownloadItem>>>,
+    persistence_path: Arc<PathBuf>,
 }
 
 impl AppState {
     fn new(app: AppHandle) -> Result<Self, String> {
-        let snapshots = Arc::new(Mutex::new(HashMap::<String, DownloadItem>::new()));
+        let persistence_path = Arc::new(snapshot_store_path(&app)?);
+        let snapshots = Arc::new(Mutex::new(load_snapshots(&persistence_path)?));
         let (command_tx, command_rx) = mpsc::channel::<ServiceCommand>();
         let (startup_tx, startup_rx) = mpsc::channel::<Result<(), String>>();
         let thread_snapshots = snapshots.clone();
+        let thread_persistence_path = persistence_path.clone();
 
         thread::Builder::new()
             .name("tur-service-thread".into())
@@ -180,7 +188,14 @@ impl AppState {
                             return;
                         }
                     };
-                    run_service_loop(service, command_rx, thread_snapshots, app).await;
+                    run_service_loop(
+                        service,
+                        command_rx,
+                        thread_snapshots,
+                        thread_persistence_path,
+                        app,
+                    )
+                    .await;
                 }));
             })
             .map_err(|err| format!("failed to spawn service thread: {err}"))?;
@@ -192,6 +207,7 @@ impl AppState {
         Ok(Self {
             command_tx,
             snapshots,
+            persistence_path,
         })
     }
 }
@@ -227,6 +243,117 @@ async fn cancel_download(state: State<'_, AppState>, id: String) -> Result<(), S
 }
 
 #[tauri::command]
+async fn remove_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    control_download(&state.command_tx, ServiceCommandKind::Remove, id).await
+}
+
+#[tauri::command]
+async fn retry_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    control_download(&state.command_tx, ServiceCommandKind::Retry, id).await
+}
+
+#[tauri::command]
+async fn clear_completed(state: State<'_, AppState>) -> Result<(), String> {
+    let keys = {
+        let snapshots = state
+            .snapshots
+            .lock()
+            .map_err(|_| "download state is poisoned".to_string())?;
+        snapshots
+            .iter()
+            .filter(|(_, item)| {
+                item.status == "completed" || item.status == "error" || item.status == "stopped"
+            })
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<String>>()
+    };
+    {
+        let mut snapshots = state
+            .snapshots
+            .lock()
+            .map_err(|_| "download state is poisoned".to_string())?;
+        for id in &keys {
+            snapshots.remove(id);
+        }
+        persist_snapshots(&state.persistence_path, &snapshots)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_download_folder(path: String) -> Result<(), String> {
+    let dir = std::path::Path::new(&path);
+    if !dir.exists() {
+        return Err(format!("path does not exist: {}", path));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| format!("failed to open folder: {e}"))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| format!("failed to open folder: {e}"))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| format!("failed to open folder: {e}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_download_file(directory: String, filename: String) -> Result<(), String> {
+    let path = std::path::Path::new(&directory).join(&filename);
+    let file = path.as_path();
+    if !file.exists() {
+        return Err(format!("file does not exist: {}", file.display()));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(file)
+            .spawn()
+            .map_err(|e| format!("failed to open file: {e}"))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(file)
+            .spawn()
+            .map_err(|e| format!("failed to open file: {e}"))?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &path.display().to_string()])
+            .spawn()
+            .map_err(|e| format!("failed to open file: {e}"))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_download(state: State<'_, AppState>, id: String) -> Result<DownloadItem, String> {
+    let snapshots = state
+        .snapshots
+        .lock()
+        .map_err(|_| "download state is poisoned".to_string())?;
+    snapshots
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("download {id} was not found"))
+}
+
+#[tauri::command]
 fn list_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadItem>, String> {
     let snapshots = state
         .snapshots
@@ -235,6 +362,45 @@ fn list_downloads(state: State<'_, AppState>) -> Result<Vec<DownloadItem>, Strin
     let mut rows = snapshots.values().cloned().collect::<Vec<_>>();
     rows.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
     Ok(rows)
+}
+
+#[tauri::command]
+async fn open_instance_window(app: AppHandle, state: State<'_, AppState>, task_id: String) -> Result<(), String> {
+    let label = format!("download-instance:{task_id}");
+
+    // If window already exists, show and focus it
+    if let Some(window) = app.get_webview_window(&label) {
+        window.show().map_err(|e| format!("failed to show window: {e}"))?;
+        window.set_focus().map_err(|e| format!("failed to focus window: {e}"))?;
+        return Ok(());
+    }
+
+    // Get task info for window title
+    let task_title = {
+        let snapshots = state
+            .snapshots
+            .lock()
+            .map_err(|_| "download state is poisoned".to_string())?;
+        snapshots
+            .get(&task_id)
+            .map(|item| item.filename.clone())
+            .unwrap_or_else(|| "Download".to_string())
+    };
+
+    // Create a new instance window
+    WebviewWindowBuilder::new(
+        &app,
+        &label,
+        WebviewUrl::App("index.html".into()),
+    )
+    .title(format!("Tur — {task_title}"))
+    .inner_size(728.0, 428.0)
+    .min_inner_size(600.0, 350.0)
+    .resizable(true)
+    .build()
+    .map_err(|e| format!("failed to create download window: {e}"))?;
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -249,6 +415,8 @@ enum ServiceCommandKind {
     Pause,
     Resume,
     Cancel,
+    Remove,
+    Retry,
 }
 
 async fn control_download(
@@ -261,6 +429,8 @@ async fn control_download(
         ServiceCommandKind::Pause => ServiceCommand::Pause { id, response_tx },
         ServiceCommandKind::Resume => ServiceCommand::Resume { id, response_tx },
         ServiceCommandKind::Cancel => ServiceCommand::Cancel { id, response_tx },
+        ServiceCommandKind::Remove => ServiceCommand::Remove { id, response_tx },
+        ServiceCommandKind::Retry => ServiceCommand::Retry { id, response_tx },
     };
     command_tx
         .send(command)
@@ -274,6 +444,7 @@ async fn run_service_loop(
     service: TurService,
     command_rx: mpsc::Receiver<ServiceCommand>,
     snapshots: Arc<Mutex<HashMap<String, DownloadItem>>>,
+    persistence_path: Arc<PathBuf>,
     app: AppHandle,
 ) {
     let mut handles = HashMap::<String, DownloadHandle>::new();
@@ -284,7 +455,15 @@ async fn run_service_loop(
         loop {
             match command_rx.try_recv() {
                 Ok(command) => {
-                    handle_service_command(command, &service, &mut handles, &snapshots, &app).await;
+                    handle_service_command(
+                        command,
+                        &service,
+                        &mut handles,
+                        &snapshots,
+                        &persistence_path,
+                        &app,
+                    )
+                    .await;
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
                 Err(mpsc::TryRecvError::Disconnected) => {
@@ -298,7 +477,7 @@ async fn run_service_loop(
             break;
         }
 
-        poll_updates(&mut handles, &snapshots, &app);
+        poll_updates(&mut handles, &snapshots, &persistence_path, &app);
         ticker.tick().await;
     }
 
@@ -310,11 +489,14 @@ async fn handle_service_command(
     service: &TurService,
     handles: &mut HashMap<String, DownloadHandle>,
     snapshots: &Arc<Mutex<HashMap<String, DownloadItem>>>,
+    persistence_path: &Arc<PathBuf>,
     app: &AppHandle,
 ) {
     match command {
         ServiceCommand::Start { input, response_tx } => {
-            let result = start_download_inner(service, handles, snapshots, app, input).await;
+            let result =
+                start_download_inner(service, handles, snapshots, persistence_path, app, input)
+                    .await;
             let _ = response_tx.send(result);
         }
         ServiceCommand::Pause { id, response_tx } => {
@@ -344,6 +526,51 @@ async fn handle_service_command(
             };
             let _ = response_tx.send(result);
         }
+        ServiceCommand::Remove { id, response_tx } => {
+            let result = if handles.contains_key(&id) {
+                if let Some(handle) = handles.remove(&id) {
+                    handle.cancel().await;
+                }
+                if let Ok(mut guard) = snapshots.lock() {
+                    guard.remove(&id);
+                    let _ = persist_snapshots(persistence_path, &guard);
+                }
+                Ok(())
+            } else {
+                if let Ok(mut guard) = snapshots.lock() {
+                    guard.remove(&id);
+                    let _ = persist_snapshots(persistence_path, &guard);
+                }
+                Ok(())
+            };
+            let _ = response_tx.send(result);
+        }
+        ServiceCommand::Retry { id, response_tx } => {
+            let url = {
+                snapshots.lock().ok().and_then(|g| {
+                    g.get(&id).map(|item| (item.url.clone(), item.directory.clone()))
+                })
+            };
+            let result = if let Some((url, directory)) = url {
+                let request = DownloadRequest::new(url).dir(std::path::PathBuf::from(directory));
+                match service.add_download(request).await {
+                    Ok(handle) => {
+                        let new_id = handle.id.to_string();
+                        // Remove old snapshot
+                        if let Ok(mut guard) = snapshots.lock() {
+                            guard.remove(&id);
+                            let _ = persist_snapshots(persistence_path, &guard);
+                        }
+                        handles.insert(new_id.clone(), handle);
+                        Ok(())
+                    }
+                    Err(e) => Err(format!("failed to retry download: {e}")),
+                }
+            } else {
+                Err(format!("download {id} was not found"))
+            };
+            let _ = response_tx.send(result);
+        }
     }
 }
 
@@ -351,6 +578,7 @@ async fn start_download_inner(
     service: &TurService,
     handles: &mut HashMap<String, DownloadHandle>,
     snapshots: &Arc<Mutex<HashMap<String, DownloadItem>>>,
+    persistence_path: &Arc<PathBuf>,
     app: &AppHandle,
     input: StartDownloadInput,
 ) -> Result<Vec<DownloadItem>, String> {
@@ -438,10 +666,11 @@ async fn start_download_inner(
         );
 
         handles.insert(id.clone(), handle);
-        snapshots
+        let mut guard = snapshots
             .lock()
-            .map_err(|_| "download state is poisoned".to_string())?
-            .insert(id.clone(), row.clone());
+            .map_err(|_| "download state is poisoned".to_string())?;
+        guard.insert(id.clone(), row.clone());
+        persist_snapshots(persistence_path, &guard)?;
         let _ = app.emit(DOWNLOAD_EVENT, row.clone());
         started.push(row);
     }
@@ -452,6 +681,7 @@ async fn start_download_inner(
 fn poll_updates(
     handles: &mut HashMap<String, DownloadHandle>,
     snapshots: &Arc<Mutex<HashMap<String, DownloadItem>>>,
+    persistence_path: &Arc<PathBuf>,
     app: &AppHandle,
 ) {
     let mut finished = Vec::new();
@@ -465,6 +695,7 @@ fn poll_updates(
             match handle.try_recv() {
                 Ok(update) => {
                     let mut should_drop_handle = false;
+                    let mut should_persist = false;
                     if let Ok(mut guard) = snapshots.lock() {
                         if let Some(row) = guard.get_mut(&id) {
                             row.apply_update(&update);
@@ -476,7 +707,16 @@ fn poll_updates(
                             ) {
                                 should_drop_handle = true;
                             }
+                            should_persist = matches!(
+                                update,
+                                DownloadUpdate::StatusChanged(_)
+                                    | DownloadUpdate::TotalSize(_)
+                                    | DownloadUpdate::Progress { .. }
+                            );
                             let _ = app.emit(DOWNLOAD_EVENT, snapshot);
+                        }
+                        if should_persist {
+                            let _ = persist_snapshots(persistence_path, &guard);
                         }
                     }
                     if should_drop_handle {
@@ -496,6 +736,68 @@ fn poll_updates(
     for id in finished {
         handles.remove(&id);
     }
+}
+
+fn snapshot_store_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let mut base = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("failed to resolve app data dir: {e}"))?;
+    std::fs::create_dir_all(&base)
+        .map_err(|e| format!("failed to create app data dir {}: {e}", base.display()))?;
+    base.push(SNAPSHOT_FILE_NAME);
+    Ok(base)
+}
+
+fn normalize_restored_download(mut item: DownloadItem) -> DownloadItem {
+    item.speed_bps = 0.0;
+    item.worker_snapshots.clear();
+    match item.status.as_str() {
+        "downloading" | "queued" => {
+            item.status = "stopped".into();
+            if item.error_message.is_none() {
+                item.error_message = Some("Restored after app restart".into());
+            }
+        }
+        "paused" | "stopped" | "completed" | "error" => {}
+        _ => {
+            item.status = "stopped".into();
+        }
+    }
+    if item.total_size > 0 {
+        item.progress = (item.downloaded_bytes as f64 / item.total_size as f64).clamp(0.0, 1.0);
+    }
+    item
+}
+
+fn load_snapshots(path: &PathBuf) -> Result<HashMap<String, DownloadItem>, String> {
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| format!("failed to read snapshot store {}: {e}", path.display()))?;
+    if raw.trim().is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<DownloadItem> = serde_json::from_str(&raw)
+        .map_err(|e| format!("failed to parse snapshot store {}: {e}", path.display()))?;
+    Ok(rows
+        .into_iter()
+        .map(normalize_restored_download)
+        .map(|item| (item.id.clone(), item))
+        .collect())
+}
+
+fn persist_snapshots(
+    path: &PathBuf,
+    snapshots: &HashMap<String, DownloadItem>,
+) -> Result<(), String> {
+    let mut rows = snapshots.values().cloned().collect::<Vec<_>>();
+    rows.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
+    let json = serde_json::to_vec_pretty(&rows)
+        .map_err(|e| format!("failed to serialize snapshots: {e}"))?;
+    std::fs::write(path, json)
+        .map_err(|e| format!("failed to write snapshot store {}: {e}", path.display()))
 }
 
 fn derive_filename(url: &str) -> String {
@@ -588,6 +890,65 @@ pub fn run() {
                 Box::<dyn std::error::Error>::from(io_err)
             })?;
             app.manage(state);
+
+            // Build tray icon with menu
+            let show = MenuItem::with_id(app, "show", "Show Tur", true, None::<&str>)
+                .map_err(|e| Box::<dyn std::error::Error>::from(
+                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                ))?;
+            let new_download = MenuItem::with_id(app, "new_download", "New Download", true, None::<&str>)
+                .map_err(|e| Box::<dyn std::error::Error>::from(
+                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                ))?;
+            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)
+                .map_err(|e| Box::<dyn std::error::Error>::from(
+                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                ))?;
+            let menu = Menu::with_items(app, &[&show, &new_download, &quit])
+                .map_err(|e| Box::<dyn std::error::Error>::from(
+                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                ))?;
+
+            let _tray = TrayIconBuilder::new()
+                .tooltip("Tur Download Manager")
+                .menu(&menu)
+                .on_menu_event(|app_handle, event| {
+                    match event.id().as_ref() {
+                        "show" => {
+                            if let Some(window) = app_handle.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                        "new_download" => {
+                            if let Some(window) = app_handle.get_webview_window("main") {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                                let _ = app_handle.emit("focus-add-download", ());
+                            }
+                        }
+                        "quit" => {
+                            app_handle.exit(0);
+                        }
+                        _ => {}
+                    }
+                })
+                .build(app)
+                .map_err(|e| Box::<dyn std::error::Error>::from(
+                    std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                ))?;
+
+            // Close-to-tray: hide main window instead of quitting
+            if let Some(window) = app.get_webview_window("main") {
+                let window_clone = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = window_clone.hide();
+                    }
+                });
+            }
+
             Ok(())
         })
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
@@ -612,7 +973,14 @@ pub fn run() {
             pause_download,
             resume_download,
             cancel_download,
-            list_downloads
+            remove_download,
+            retry_download,
+            clear_completed,
+            open_download_folder,
+            open_download_file,
+            get_download,
+            list_downloads,
+            open_instance_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

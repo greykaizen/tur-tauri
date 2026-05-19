@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Tur",
-  "version": "0.1.0",
-  "identifier": "com.greykaizen.tur",
+  "version": "0.3.0",
+  "identifier": "com.kaizen.tur",
   "build": {
     "beforeDevCommand": "bun run web:dev",
     "devUrl": "http://localhost:1420",
@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "Tur",
-        "width": 1320,
-        "height": 860,
-        "minWidth": 1100,
-        "minHeight": 720,
+        "width": 1180,
+        "height": 780,
+        "minWidth": 1040,
+        "minHeight": 680,
         "resizable": true
       }
     ],

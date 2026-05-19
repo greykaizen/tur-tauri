@@ -1,8 +1,8 @@
 [package]
 name = "tur-tauri"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+version = "0.3.0"
+description = "Tur desktop GUI powered by tur-rs"
+authors = ["greykaizen"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -19,7 +19,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 url = { version = "2" }
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2.5.1"
