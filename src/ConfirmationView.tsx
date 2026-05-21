@@ -73,7 +73,8 @@ export default function ConfirmationView() {
   const [filename, setFilename] = useState("");
   const [useAuth, setUseAuth] = useState(false);
   const [user, setUser] = useState("");
-  const [password, setPassword] = useState("");
+  const [engine, setEngine] = useState("tur");
+  const [plugins, setPlugins] = useState<string[]>([]);
 
   const { Icon, color } = fileType(filename || url);
 
@@ -137,6 +138,8 @@ export default function ConfirmationView() {
           urls: [url.trim()],
           directory: saveDir.trim(),
           filename: filename.trim() || null,
+          engineId: engine,
+          plugins,
           referer: null,
           bearerToken: null,
           cookieFile: null,
@@ -199,6 +202,18 @@ export default function ConfirmationView() {
                 <option>Music</option>
                 <option>Video</option>
                 <option>Documents</option>
+              </select>
+
+              <label className="text-right font-medium text-muted-foreground">
+                Engine
+              </label>
+              <select
+                value={engine}
+                onChange={(e) => setEngine(e.target.value)}
+                className="h-7 px-2 border border-input rounded-sm bg-transparent text-[13px] focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="tur">tur-rs (Native)</option>
+                <option value="aria2c">aria2c (External)</option>
               </select>
 
               <label className="text-right font-medium text-muted-foreground">

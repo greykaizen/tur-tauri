@@ -1,0 +1,25 @@
+# Maintainer: greykaizen <placeholder@email.com>
+pkgname=tur-bin
+pkgver=0.3.0
+pkgrel=1
+pkgdesc="A sleek, multi-engine download manager with a native Rust core"
+arch=('x86_64')
+url="https://github.com/greykaizen/tur"
+license=('MIT')
+depends=('webkit2gtk' 'gtk3' 'cairo' 'pango' 'glib2' 'openssl')
+provides=('tur')
+conflicts=('tur')
+source=("${pkgname}-${pkgver}.deb::https://github.com/greykaizen/tur/releases/download/v${pkgver}/tur_${pkgver}_amd64.deb")
+sha256sums=('SKIP') # Update this with makepkg -g before publishing
+
+package() {
+    # Extract data from deb
+    tar xf data.tar.* -C "${pkgdir}"
+
+    # Fix permissions
+    chmod -R 755 "${pkgdir}/usr/bin"
+    chmod -R 644 "${pkgdir}/usr/share"
+    chmod 755 "${pkgdir}/usr/share"
+    
+    # Symlink binary if needed, but deb already puts it in /usr/bin/tur
+}

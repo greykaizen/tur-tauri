@@ -986,10 +986,20 @@ export default function App() {
                           style={{ flex: 1, minWidth: 0, position: "relative" }}
                         >
                           <p
-                            className="text-[14px] font-semibold truncate leading-snug tracking-[-0.01em]"
+                            className="text-[14px] font-semibold truncate leading-snug tracking-[-0.01em] flex items-center gap-2"
                             title={d.filename}
                           >
-                            {d.filename}
+                            <span>{d.filename}</span>
+                            {d.engineId && d.engineId !== "tur" && (
+                              <span className="px-1.5 py-0.5 rounded-sm bg-muted text-[10px] text-muted-foreground font-mono uppercase leading-none">
+                                {d.engineId}
+                              </span>
+                            )}
+                            {d.plugins && d.plugins.length > 0 && (
+                              <span className="px-1.5 py-0.5 rounded-sm bg-blue-500/10 text-blue-500 text-[10px] font-mono uppercase leading-none">
+                                +{d.plugins[0]}
+                              </span>
+                            )}
                           </p>
                           <p
                             className="text-[12px] text-muted-foreground truncate leading-snug mt-0.5"

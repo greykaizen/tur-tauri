@@ -11,6 +11,7 @@ import { Separator } from "./ui/separator";
 export type SettingsSection =
   | "general"
   | "notifications"
+  | "extensions"
   | "shortcuts"
   | "about";
 
@@ -39,6 +40,11 @@ const sections: Array<{ id: SettingsSection; label: string; blurb: string }> = [
     id: "notifications",
     label: "Notifications",
     blurb: "Completion and failure alerts",
+  },
+  {
+    id: "extensions",
+    label: "Extensions",
+    blurb: "Engines and plugins",
   },
   {
     id: "shortcuts",
@@ -233,6 +239,51 @@ export function SettingsDialog({
                   <div className="mt-1 text-[12px] leading-5 text-muted-foreground">
                     Closing the main window hides Tur to the system tray. Use the
                     top-bar Quit action when you want to fully exit the app.
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {section === "extensions" && (
+              <div className="flex flex-col gap-6">
+                <div>
+                  <h3 className="font-medium text-foreground mb-4">
+                    Connectors & Engines
+                  </h3>
+                  <div className="flex flex-col gap-3">
+                    <div className="flex items-center justify-between p-3 border rounded-md">
+                      <div>
+                        <p className="font-medium">tur-rs</p>
+                        <p className="text-muted-foreground text-xs">
+                          Native, high-speed segmented transfer engine
+                        </p>
+                      </div>
+                      <span className="px-2 py-1 bg-green-500/10 text-green-600 text-xs rounded-sm">
+                        Active
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between p-3 border rounded-md">
+                      <div>
+                        <p className="font-medium">aria2c</p>
+                        <p className="text-muted-foreground text-xs">
+                          External fallback transfer connector
+                        </p>
+                      </div>
+                      <span className="px-2 py-1 bg-orange-500/10 text-orange-600 text-xs rounded-sm">
+                        Discovered
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between p-3 border rounded-md">
+                      <div>
+                        <p className="font-medium">yt-dlp</p>
+                        <p className="text-muted-foreground text-xs">
+                          Plugin: Video stream extractor
+                        </p>
+                      </div>
+                      <span className="px-2 py-1 bg-blue-500/10 text-blue-600 text-xs rounded-sm">
+                        Discovered
+                      </span>
+                    </div>
                   </div>
                 </div>
               </div>

@@ -31,6 +31,8 @@ export type DownloadItem = {
   url: string;
   filename: string;
   directory: string;
+  engineId: string;
+  plugins: string[];
   downloadedBytes: number;
   totalSize: number;
   speedBps: number;

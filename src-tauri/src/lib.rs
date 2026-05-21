@@ -12,8 +12,13 @@ use tokio::sync::oneshot;
 use tokio::task::LocalSet;
 use tauri_plugin_autostart::MacosLauncher;
 use tur_rs::{
-    CookieEntry, DownloadHandle, DownloadRequest, DownloadStatus, DownloadUpdate, RequestContext, ServiceConfig, TurService, WorkerSnapshot,
+    CookieEntry, DownloadRequest, DownloadStatus, DownloadUpdate, RequestContext, WorkerSnapshot
 };
+
+mod db;
+mod engines;
+mod plugins;
+mod task_manager;
 
 const DOWNLOAD_EVENT: &str = "download-update";
 
@@ -21,29 +26,33 @@ const SNAPSHOT_FILE_NAME: &str = "downloads-state.json";
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct DownloadItem {
-    id: String,
-    url: String,
-    filename: String,
-    directory: String,
-    downloaded_bytes: u64,
-    total_size: u64,
-    speed_bps: f64,
-    progress: f64,
-    status: String,
-    protocol: String,
-    error_message: Option<String>,
-    created_at_ms: u64,
-    worker_snapshots: Vec<WorkerSnapshot>,
+pub struct DownloadItem {
+    pub id: String,
+    pub url: String,
+    pub filename: String,
+    pub directory: String,
+    pub engine_id: String, // e.g. "tur", "aria2c"
+    pub plugins: Vec<String>, // e.g. ["yt-dlp"]
+    pub downloaded_bytes: u64,
+    pub total_size: u64,
+    pub speed_bps: f64,
+    pub progress: f64,
+    pub status: String,
+    pub protocol: String,
+    pub error_message: Option<String>,
+    pub created_at_ms: u64,
+    pub worker_snapshots: Vec<WorkerSnapshot>,
 }
 
 impl DownloadItem {
-    fn new(id: String, url: String, filename: String, directory: String) -> Self {
+    pub fn new(id: String, url: String, filename: String, directory: String, engine_id: String, plugins: Vec<String>) -> Self {
         Self {
             id,
             url,
             filename,
             directory,
+            engine_id,
+            plugins,
             downloaded_bytes: 0,
             total_size: 0,
             speed_bps: 0.0,
@@ -115,6 +124,8 @@ struct StartDownloadInput {
     urls: Vec<String>,
     directory: String,
     filename: Option<String>,
+    engine_id: Option<String>,
+    plugins: Option<Vec<String>>,
     referer: Option<String>,
     bearer_token: Option<String>,
     cookie_file: Option<String>,
@@ -152,17 +163,23 @@ enum ServiceCommand {
 struct AppState {
     command_tx: mpsc::Sender<ServiceCommand>,
     snapshots: Arc<Mutex<HashMap<String, DownloadItem>>>,
-    persistence_path: Arc<PathBuf>,
+    db: Arc<db::Db>,
 }
 
 impl AppState {
     fn new(app: AppHandle) -> Result<Self, String> {
-        let persistence_path = Arc::new(snapshot_store_path(&app)?);
-        let snapshots = Arc::new(Mutex::new(load_snapshots(&persistence_path)?));
+        let db_path = db_store_path(&app)?;
+        let db = Arc::new(db::Db::new(db_path).map_err(|e| format!("DB init failed: {e}"))?);
+        let items = db.load_all_downloads().unwrap_or_default();
+        let mut map = HashMap::new();
+        for item in items {
+            map.insert(item.id.clone(), item);
+        }
+        let snapshots = Arc::new(Mutex::new(map));
         let (command_tx, command_rx) = mpsc::channel::<ServiceCommand>();
         let (startup_tx, startup_rx) = mpsc::channel::<Result<(), String>>();
         let thread_snapshots = snapshots.clone();
-        let thread_persistence_path = persistence_path.clone();
+        let thread_db = db.clone();
 
         thread::Builder::new()
             .name("tur-service-thread".into())
@@ -176,23 +193,25 @@ impl AppState {
                 };
                 let local = LocalSet::new();
                 runtime.block_on(local.run_until(async move {
-                    let service = match TurService::new(ServiceConfig::default()).await {
-                        Ok(service) => {
+                    let (update_tx, update_rx) = tokio::sync::mpsc::channel(100);
+                    let task_manager = match task_manager::TaskManager::new(update_tx).await {
+                        Ok(manager) => {
                             let _ = startup_tx.send(Ok(()));
-                            service
+                            manager
                         }
                         Err(err) => {
                             let _ = startup_tx.send(Err(format!(
-                                "failed to start download service: {err}"
+                                "failed to start task manager: {err}"
                             )));
                             return;
                         }
                     };
                     run_service_loop(
-                        service,
+                        task_manager,
                         command_rx,
+                        update_rx,
                         thread_snapshots,
-                        thread_persistence_path,
+                        thread_db,
                         app,
                     )
                     .await;
@@ -207,7 +226,7 @@ impl AppState {
         Ok(Self {
             command_tx,
             snapshots,
-            persistence_path,
+            db,
         })
     }
 }
@@ -244,7 +263,16 @@ async fn cancel_download(state: State<'_, AppState>, id: String) -> Result<(), S
 
 #[tauri::command]
 async fn remove_download(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    control_download(&state.command_tx, ServiceCommandKind::Remove, id).await
+    let (tx, rx) = oneshot::channel();
+    state
+        .command_tx
+        .send(ServiceCommand::Remove {
+            id: id.clone(),
+            response_tx: tx,
+        })
+        .map_err(|_| "failed to send command".to_string())?;
+    rx.await.map_err(|_| "failed to receive response".to_string())??;
+    Ok(())
 }
 
 #[tauri::command]
@@ -254,19 +282,18 @@ async fn retry_download(state: State<'_, AppState>, id: String) -> Result<(), St
 
 #[tauri::command]
 async fn clear_completed(state: State<'_, AppState>) -> Result<(), String> {
-    let keys = {
+    let mut keys = Vec::new();
+    {
         let snapshots = state
             .snapshots
             .lock()
             .map_err(|_| "download state is poisoned".to_string())?;
-        snapshots
-            .iter()
-            .filter(|(_, item)| {
-                item.status == "completed" || item.status == "error" || item.status == "stopped"
-            })
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<String>>()
-    };
+        for (k, v) in snapshots.iter() {
+            if matches!(v.status.as_str(), "completed" | "error" | "stopped") {
+                keys.push(k.clone());
+            }
+        }
+    }
     {
         let mut snapshots = state
             .snapshots
@@ -274,8 +301,8 @@ async fn clear_completed(state: State<'_, AppState>) -> Result<(), String> {
             .map_err(|_| "download state is poisoned".to_string())?;
         for id in &keys {
             snapshots.remove(id);
+            let _ = state.db.delete_download(id);
         }
-        persist_snapshots(&state.persistence_path, &snapshots)?;
     }
     Ok(())
 }
@@ -495,13 +522,13 @@ async fn control_download(
 }
 
 async fn run_service_loop(
-    service: TurService,
-    command_rx: mpsc::Receiver<ServiceCommand>,
+    mut task_manager: task_manager::TaskManager,
+    mut command_rx: mpsc::Receiver<ServiceCommand>,
+    mut update_rx: tokio::sync::mpsc::Receiver<(String, DownloadUpdate)>,
     snapshots: Arc<Mutex<HashMap<String, DownloadItem>>>,
-    persistence_path: Arc<PathBuf>,
+    db: Arc<db::Db>,
     app: AppHandle,
 ) {
-    let mut handles = HashMap::<String, DownloadHandle>::new();
     let mut ticker = tokio::time::interval(Duration::from_millis(150));
     let mut disconnected = false;
 
@@ -511,16 +538,15 @@ async fn run_service_loop(
                 Ok(command) => {
                     handle_service_command(
                         command,
-                        &service,
-                        &mut handles,
+                        &mut task_manager,
                         &snapshots,
-                        &persistence_path,
+                        &db,
                         &app,
                     )
                     .await;
                 }
-                Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => {
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     disconnected = true;
                     break;
                 }
@@ -531,91 +557,68 @@ async fn run_service_loop(
             break;
         }
 
-        poll_updates(&mut handles, &snapshots, &persistence_path, &app);
+        task_manager.poll_updates();
+        poll_updates(&mut update_rx, &snapshots, &db, &app);
         ticker.tick().await;
     }
-
-    service.shutdown().await;
 }
 
 async fn handle_service_command(
     command: ServiceCommand,
-    service: &TurService,
-    handles: &mut HashMap<String, DownloadHandle>,
+    task_manager: &mut task_manager::TaskManager,
     snapshots: &Arc<Mutex<HashMap<String, DownloadItem>>>,
-    persistence_path: &Arc<PathBuf>,
+    db: &Arc<db::Db>,
     app: &AppHandle,
 ) {
     match command {
         ServiceCommand::Start { input, response_tx } => {
             let result =
-                start_download_inner(service, handles, snapshots, persistence_path, app, input)
+                start_download_inner(task_manager, snapshots, db, app, input)
                     .await;
             let _ = response_tx.send(result);
         }
         ServiceCommand::Pause { id, response_tx } => {
-            let result = if let Some(handle) = handles.get(&id) {
-                handle.pause().await;
-                Ok(())
-            } else {
-                Err(format!("download {id} was not found"))
-            };
+            let result = task_manager.pause(&id).await;
             let _ = response_tx.send(result);
         }
         ServiceCommand::Resume { id, response_tx } => {
-            let result = if let Some(handle) = handles.get(&id) {
-                handle.resume().await;
-                Ok(())
-            } else {
-                Err(format!("download {id} was not found"))
-            };
+            let result = task_manager.resume(&id).await;
             let _ = response_tx.send(result);
         }
         ServiceCommand::Cancel { id, response_tx } => {
-            let result = if let Some(handle) = handles.get(&id) {
-                handle.cancel().await;
-                Ok(())
-            } else {
-                Err(format!("download {id} was not found"))
-            };
+            let result = task_manager.cancel(&id).await;
             let _ = response_tx.send(result);
         }
         ServiceCommand::Remove { id, response_tx } => {
-            let result = if handles.contains_key(&id) {
-                if let Some(handle) = handles.remove(&id) {
-                    handle.cancel().await;
-                }
-                if let Ok(mut guard) = snapshots.lock() {
-                    guard.remove(&id);
-                    let _ = persist_snapshots(persistence_path, &guard);
-                }
-                Ok(())
-            } else {
-                if let Ok(mut guard) = snapshots.lock() {
-                    guard.remove(&id);
-                    let _ = persist_snapshots(persistence_path, &guard);
-                }
-                Ok(())
-            };
-            let _ = response_tx.send(result);
+            let _ = task_manager.remove(&id).await;
+            if let Ok(mut guard) = snapshots.lock() {
+                guard.remove(&id);
+                let _ = db.delete_download(&id);
+            }
+            let _ = response_tx.send(Ok(()));
         }
         ServiceCommand::Retry { id, response_tx } => {
-            let url = {
+            // Need to fetch original url and directory to restart
+            let (url, directory, engine_id, plugins) = {
                 snapshots.lock().ok().and_then(|g| {
-                    g.get(&id).map(|item| (item.url.clone(), item.directory.clone()))
-                })
+                    g.get(&id).map(|item| {
+                        (item.url.clone(), item.directory.clone(), item.engine_id.clone(), item.plugins.clone())
+                    })
+                }).unwrap_or_default()
             };
-            let result = if let Some((url, directory)) = url {
-                let request = DownloadRequest::new(url).dir(std::path::PathBuf::from(directory));
-                match service.add_download(request).await {
-                    Ok(handle) => {
-                        let new_id = handle.id.to_string();
-                        // Remove old snapshot
+            let result = if !url.is_empty() {
+                let start_input = engines::adapter::AdapterStartInput {
+                    id: uuid::Uuid::now_v7().to_string(),
+                    url,
+                    directory: PathBuf::from(directory),
+                    filename: String::new(),
+                };
+                match task_manager.start(&engine_id, start_input.clone()).await {
+                    Ok(_) => {
                         if let Ok(mut guard) = snapshots.lock() {
                             guard.remove(&id);
-                            let _ = persist_snapshots(persistence_path, &guard);
+                            let _ = db.delete_download(&id);
                         }
-                        handles.insert(new_id.clone(), handle);
                         Ok(())
                     }
                     Err(e) => Err(format!("failed to retry download: {e}")),
@@ -629,10 +632,9 @@ async fn handle_service_command(
 }
 
 async fn start_download_inner(
-    service: &TurService,
-    handles: &mut HashMap<String, DownloadHandle>,
+    task_manager: &mut task_manager::TaskManager,
     snapshots: &Arc<Mutex<HashMap<String, DownloadItem>>>,
-    persistence_path: &Arc<PathBuf>,
+    db: &Arc<db::Db>,
     app: &AppHandle,
     input: StartDownloadInput,
 ) -> Result<Vec<DownloadItem>, String> {
@@ -644,6 +646,7 @@ async fn start_download_inner(
         bearer_token,
         cookie_file,
         headers,
+        ..
     } = input;
 
     let urls = urls
@@ -692,39 +695,39 @@ async fn start_download_inner(
     let mut started = Vec::with_capacity(urls.len());
 
     for url in urls {
-        let mut request = DownloadRequest::new(url.clone()).dir(PathBuf::from(&directory));
-        if let Some(name) = filename
+        let id = uuid::Uuid::now_v7().to_string();
+        let name = filename
             .clone()
             .filter(|value| !value.trim().is_empty() && single_url)
-        {
-            request = request.filename(name);
-        }
-        if has_context {
-            request = request.context(context.clone());
-        }
+            .unwrap_or_else(|| derive_filename(&url));
+            
+        let start_input = engines::adapter::AdapterStartInput {
+            id: id.clone(),
+            url: url.clone(),
+            directory: PathBuf::from(&directory),
+            filename: name.clone(),
+        };
 
-        let handle = service
-            .add_download(request)
+        let engine_id = input.engine_id.clone().unwrap_or_else(|| "tur".to_string());
+        
+        task_manager.start(&engine_id, start_input)
             .await
             .map_err(|err| format!("failed to start download: {err}"))?;
 
-        let id = handle.id.to_string();
         let row = DownloadItem::new(
             id.clone(),
             url.clone(),
-            filename
-                .clone()
-                .filter(|value| !value.trim().is_empty() && single_url)
-                .unwrap_or_else(|| derive_filename(&url)),
+            name,
             directory.clone(),
+            engine_id,
+            input.plugins.clone().unwrap_or_default(),
         );
 
-        handles.insert(id.clone(), handle);
         let mut guard = snapshots
             .lock()
             .map_err(|_| "download state is poisoned".to_string())?;
         guard.insert(id.clone(), row.clone());
-        persist_snapshots(persistence_path, &guard)?;
+        let _ = db.save_download(&row);
         let _ = app.emit(DOWNLOAD_EVENT, row.clone());
         started.push(row);
     }
@@ -733,74 +736,50 @@ async fn start_download_inner(
 }
 
 fn poll_updates(
-    handles: &mut HashMap<String, DownloadHandle>,
+    update_rx: &mut tokio::sync::mpsc::Receiver<(String, DownloadUpdate)>,
     snapshots: &Arc<Mutex<HashMap<String, DownloadItem>>>,
-    persistence_path: &Arc<PathBuf>,
+    db: &Arc<db::Db>,
     app: &AppHandle,
 ) {
-    let mut finished = Vec::new();
-    let keys = handles.keys().cloned().collect::<Vec<_>>();
-
-    for id in keys {
-        let Some(handle) = handles.get_mut(&id) else {
-            continue;
-        };
-        loop {
-            match handle.try_recv() {
-                Ok(update) => {
-                    let mut should_drop_handle = false;
-                    let mut should_persist = false;
-                    if let Ok(mut guard) = snapshots.lock() {
-                        if let Some(row) = guard.get_mut(&id) {
-                            row.apply_update(&update);
-                            let snapshot = row.clone();
-                            if matches!(
-                                update,
-                                DownloadUpdate::StatusChanged(DownloadStatus::Completed)
-                                    | DownloadUpdate::StatusChanged(DownloadStatus::Error(_))
-                            ) {
-                                should_drop_handle = true;
-                            }
-                            should_persist = matches!(
-                                update,
-                                DownloadUpdate::StatusChanged(_)
-                                    | DownloadUpdate::TotalSize(_)
-                                    | DownloadUpdate::Progress { .. }
-                            );
-                            let _ = app.emit(DOWNLOAD_EVENT, snapshot);
-                        }
+    loop {
+        match update_rx.try_recv() {
+            Ok((id, update)) => {
+                let mut should_persist = false;
+                if let Ok(mut guard) = snapshots.lock() {
+                    if let Some(row) = guard.get_mut(&id) {
+                        row.apply_update(&update);
+                        let snapshot = row.clone();
+                        should_persist = matches!(
+                            update,
+                            DownloadUpdate::StatusChanged(_)
+                                | DownloadUpdate::TotalSize(_)
+                                | DownloadUpdate::Progress { .. }
+                        );
+                        let _ = app.emit(DOWNLOAD_EVENT, &snapshot);
+                        
                         if should_persist {
-                            let _ = persist_snapshots(persistence_path, &guard);
+                            let _ = db.save_download(&snapshot);
                         }
                     }
-                    if should_drop_handle {
-                        finished.push(id.clone());
-                        break;
-                    }
-                }
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
-                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                    finished.push(id.clone());
-                    break;
                 }
             }
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => break,
         }
-    }
-
-    for id in finished {
-        handles.remove(&id);
     }
 }
 
-fn snapshot_store_path(app: &AppHandle) -> Result<PathBuf, String> {
-    let mut base = app
+fn db_store_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let mut path = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("failed to resolve app data dir: {e}"))?;
-    std::fs::create_dir_all(&base)
-        .map_err(|e| format!("failed to create app data dir {}: {e}", base.display()))?;
-    base.push(SNAPSHOT_FILE_NAME);
-    Ok(base)
+    if !path.exists() {
+        std::fs::create_dir_all(&path)
+            .map_err(|e| format!("failed to create app data dir: {e}"))?;
+    }
+    path.push("tur.db");
+    Ok(path)
 }
 
 fn normalize_restored_download(mut item: DownloadItem) -> DownloadItem {
@@ -824,35 +803,7 @@ fn normalize_restored_download(mut item: DownloadItem) -> DownloadItem {
     item
 }
 
-fn load_snapshots(path: &PathBuf) -> Result<HashMap<String, DownloadItem>, String> {
-    if !path.exists() {
-        return Ok(HashMap::new());
-    }
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| format!("failed to read snapshot store {}: {e}", path.display()))?;
-    if raw.trim().is_empty() {
-        return Ok(HashMap::new());
-    }
-    let rows: Vec<DownloadItem> = serde_json::from_str(&raw)
-        .map_err(|e| format!("failed to parse snapshot store {}: {e}", path.display()))?;
-    Ok(rows
-        .into_iter()
-        .map(normalize_restored_download)
-        .map(|item| (item.id.clone(), item))
-        .collect())
-}
 
-fn persist_snapshots(
-    path: &PathBuf,
-    snapshots: &HashMap<String, DownloadItem>,
-) -> Result<(), String> {
-    let mut rows = snapshots.values().cloned().collect::<Vec<_>>();
-    rows.sort_by(|a, b| b.created_at_ms.cmp(&a.created_at_ms));
-    let json = serde_json::to_vec_pretty(&rows)
-        .map_err(|e| format!("failed to serialize snapshots: {e}"))?;
-    std::fs::write(path, json)
-        .map_err(|e| format!("failed to write snapshot store {}: {e}", path.display()))
-}
 
 fn derive_filename(url: &str) -> String {
     url.split('/')

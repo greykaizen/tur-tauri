@@ -1,0 +1,42 @@
+app-id: com.kaizen.tur
+runtime: org.freedesktop.Platform
+runtime-version: '23.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.node20
+command: tur-tauri
+finish-args:
+  # X11 + Wayland
+  - --socket=fallback-x11
+  - --socket=wayland
+  # Network access for downloading
+  - --share=network
+  # GPU acceleration for webview
+  - --device=dri
+  # DBus for notifications and tray
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # Downloads folder access
+  - --filesystem=xdg-download
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/node20/bin
+  env:
+    CARGO_HOME: /run/build/tur-tauri/cargo
+    # Optional: point to bun installation if bypassing node
+modules:
+  - name: tur
+    buildsystem: simple
+    build-commands:
+      # Flatpak environment requires specific dependency offline generators
+      # For now, we assume network access during build or pre-generated sources
+      - bun install
+      - cargo build --release
+      - install -Dm755 src-tauri/target/release/tur-tauri /app/bin/tur-tauri
+      - install -Dm644 src-tauri/icons/128x128.png /app/share/icons/hicolor/128x128/apps/com.kaizen.tur.png
+      - install -Dm644 src-tauri/icons/32x32.png /app/share/icons/hicolor/32x32/apps/com.kaizen.tur.png
+      # A desktop file needs to be installed
+      - install -Dm644 packaging/flatpak/com.kaizen.tur.desktop /app/share/applications/com.kaizen.tur.desktop
+    sources:
+      - type: dir
+        path: ../../
