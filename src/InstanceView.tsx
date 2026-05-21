@@ -1,57 +1,55 @@
 import { useEffect, useState, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow, PhysicalSize } from "@tauri-apps/api/window";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
-import type { DownloadItem, WorkerSnapshot, WorkerState } from "./types";
+import type { DownloadItem, WorkerSnapshot, WorkerState, DownloadStatus } from "./types";
 import { formatBytes, formatSpeed, formatEta } from "./lib/format";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "./components/ui/tabs";
 import { Button } from "./components/ui/button";
-
-const DOWNLOAD_EVENT = "download-update";
-
-// Mock data for browser testing
-const MOCK_DOWNLOAD: DownloadItem = {
-  id: "test",
-  filename: "idm.ogv",
-  url: "https://www.internetdownloadmanager.com/video2/idm.ogv",
-  directory: "/Downloads",
-  downloadedBytes: 4_360_000_000,
-  totalSize: 17_745_000_000,
-  speedBps: 1_916_000_000,
-  progress: 24.57,
-  status: "downloading",
-  protocol: "http2",
-  createdAtMs: Date.now(),
-  workerSnapshots: [
-    { connectionId: 1, state: "connecting", transferredBytes: 656000000, speedBps: 0, rangeStart: 0, rangeCursor: 656000000, rangeEnd: 2000000000 },
-    { connectionId: 2, state: "downloading", transferredBytes: 789937000, speedBps: 1916000000, rangeStart: 2000000000, rangeCursor: 2789937000, rangeEnd: 4000000000 },
-    { connectionId: 3, state: "downloading", transferredBytes: 640625000, speedBps: 0, rangeStart: 4000000000, rangeCursor: 4640625000, rangeEnd: 6000000000 },
-    { connectionId: 4, state: "downloading", transferredBytes: 578125000, speedBps: 0, rangeStart: 6000000000, rangeCursor: 6578125000, rangeEnd: 8000000000 },
-    { connectionId: 5, state: "downloading", transferredBytes: 453125000, speedBps: 0, rangeStart: 8000000000, rangeCursor: 8453125000, rangeEnd: 10000000000 },
-    { connectionId: 6, state: "downloading", transferredBytes: 429687000, speedBps: 0, rangeStart: 10000000000, rangeCursor: 10429687000, rangeEnd: 12000000000 },
-  ],
-  errorMessage: null,
-};
+import { Titlebar } from "./components/Titlebar";
 
 function workerStateLabel(state: WorkerState): string {
   const labels: Record<WorkerState, string> = {
-    connecting:       "Send GET...",
+    connecting: "Connecting...",
     waiting_for_work: "Waiting",
-    downloading:      "Receiving data...",
-    retrying:         "Retrying...",
-    paused:           "Paused",
-    stopped:          "Stopped",
-    finished:         "Finished",
+    downloading: "Receiving data...",
+    retrying: "Retrying...",
+    paused: "Paused",
+    stopped: "Stopped",
+    finished: "Finished",
   };
   return labels[state] ?? state;
 }
 
+const DOWNLOAD_EVENT = "download-update";
+
 export default function InstanceView() {
-  const [download, setDownload] = useState<DownloadItem>(MOCK_DOWNLOAD);
+  const [download, setDownload] = useState<DownloadItem | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showDetails, setShowDetails] = useState(true);
+  const [showDetails, setShowDetails] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+
+  // ── Theme Sync ──────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const applyTheme = () => {
+      const theme = localStorage.getItem("tur-theme") || "system";
+      const root = document.documentElement;
+      root.classList.remove("light", "dark");
+      if (
+        theme === "dark" ||
+        (theme === "system" &&
+          window.matchMedia("(prefers-color-scheme: dark)").matches)
+      ) {
+        root.classList.add("dark");
+      } else {
+        root.classList.add(theme);
+      }
+    };
+    applyTheme();
+    window.addEventListener("storage", applyTheme);
+    return () => window.removeEventListener("storage", applyTheme);
+  }, []);
 
   // Automatically resize the OS window to exactly fit content when details are toggled
   useEffect(() => {
@@ -64,9 +62,9 @@ export default function InstanceView() {
             const rect = rootRef.current.getBoundingClientRect();
             try {
               // Guaranteed native resize bypassing capabilities
-              await invoke("resize_instance_window", { 
-                width: 728.0, 
-                height: Math.ceil(rect.height)
+              await invoke("resize_instance_window", {
+                width: 728.0,
+                height: Math.ceil(rect.height),
               });
             } catch (err) {
               console.error("Failed to resize window:", err);
@@ -77,49 +75,130 @@ export default function InstanceView() {
     } catch (e) {
       // Ignore if running in regular browser
     }
-  }, [showDetails, download.workerSnapshots.length]);
+  }, [showDetails, download?.workerSnapshots.length]);
 
   useEffect(() => {
     let mounted = true;
     const bootstrap = async () => {
       try {
-        const appWindow = getCurrentWindow();
-        const taskId = appWindow.label.replace("download-instance:", "");
-        
-        const rows = await invoke<DownloadItem[]>("list_downloads");
-        const found = rows.find((r) => r.id === taskId);
-        if (mounted && found) setDownload(found);
+        const win = getCurrentWindow();
+        const taskId = win.label.replace("download-instance:", "");
+
+        // The instance window can open immediately after a task is created.
+        // Poll briefly so we don't get stuck on an empty loading screen if the
+        // snapshot has not propagated by the first paint.
+        let found: DownloadItem | null = null;
+        for (let attempt = 0; attempt < 20; attempt += 1) {
+          try {
+            found = await invoke<DownloadItem>("get_download", { id: taskId });
+            if (found) break;
+          } catch {
+            await new Promise((resolve) => setTimeout(resolve, 120));
+          }
+        }
+
+        if (mounted && found) {
+          setDownload(found);
+          setError(null);
+        } else if (mounted) {
+          setError(`Download ${taskId} was not found.`);
+        }
 
         const unlisten = await listen<DownloadItem>(DOWNLOAD_EVENT, (ev) => {
-          if (ev.payload.id === taskId) setDownload(ev.payload);
+          if (ev.payload.id === taskId) {
+            setDownload(ev.payload);
+            setError(null);
+          }
         });
 
-        return () => { mounted = false; unlisten(); };
+        return () => {
+          mounted = false;
+          unlisten();
+        };
       } catch (err) {
-        // Fallback to MOCK data if not in Tauri
+        if (mounted) setError(err instanceof Error ? err.message : String(err));
       }
     };
 
     let cleanup: (() => void) | undefined;
     bootstrap().then((c) => (cleanup = c));
-    return () => { mounted = false; cleanup?.(); };
+    return () => {
+      mounted = false;
+      cleanup?.();
+    };
   }, []);
 
+  // Track previous status to detect transitions
+  const prevStatusRef = useRef<DownloadStatus | null>(null);
+
+  useEffect(() => {
+    if (!download) return;
+    
+    // Only transition if it changed to completed (or was completed on first load)
+    if (prevStatusRef.current !== "completed" && download.status === "completed") {
+      const transition = async () => {
+        try {
+          await invoke("open_completion_window", { taskId: download.id });
+          await getCurrentWindow().close();
+        } catch (err) {
+          console.error("Failed to transition to completion window:", err);
+        }
+      };
+      transition();
+    }
+    
+    prevStatusRef.current = download.status;
+  }, [download?.status, download?.id]);
+
+  if (!download) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-background px-6 text-[14px] font-sans text-muted-foreground">
+        <div className="max-w-[420px] rounded-xl border border-border bg-card px-5 py-4 text-center shadow-sm">
+          {error ? (
+            <>
+              <div className="text-[14px] font-semibold text-red-500">
+                Failed to open download window
+              </div>
+              <div className="mt-2 text-[12px] leading-5 text-muted-foreground">
+                {error}
+              </div>
+            </>
+          ) : (
+            <div className="text-[13px]">Loading download details…</div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   const act = async (action: "pause" | "resume" | "cancel") => {
+    if (!download) return;
     try {
       await invoke(`${action}_download`, { id: download.id });
-      if (action === "cancel") getCurrentWindow().close();
     } catch (err) {
       console.error(action, err);
     }
+    if (action === "cancel") {
+      try {
+        await getCurrentWindow().close();
+      } catch {}
+    }
   };
 
-  const isActive = download.status === "downloading" || download.status === "queued";
-  const pct = download.progress.toFixed(2);
+  const isActive = ["downloading", "retrying", "queued"].includes(
+    download.status,
+  );
+  const pct = Math.max(0, Math.min(100, download.progress * 100)).toFixed(2);
 
   // Chunk map segments
   const segments = download.workerSnapshots
-    .filter((w) => w.rangeStart != null && w.rangeCursor != null && w.rangeEnd != null && w.rangeEnd > 0)
+    .filter(
+      (w) =>
+        w.rangeStart != null &&
+        w.rangeCursor != null &&
+        w.rangeEnd != null &&
+        w.rangeEnd > 0,
+    )
     .map((w) => {
       const total = w.rangeEnd! - w.rangeStart!;
       const downloaded = w.rangeCursor! - w.rangeStart!;
@@ -127,66 +206,100 @@ export default function InstanceView() {
         id: w.connectionId,
         left: (w.rangeStart! / download.totalSize) * 100,
         width: (total / download.totalSize) * 100,
-        progressWidth: (downloaded / total) * 100,
+        progressWidth: total > 0 ? (downloaded / total) * 100 : 0,
       };
     });
 
+
+
   return (
-    <div ref={rootRef} className="flex flex-col bg-background text-foreground font-sans text-[13px] select-none">
-      <Tabs defaultValue="status" className="flex flex-col w-full">
+    <div className="flex flex-col h-screen w-full bg-background text-foreground font-sans text-[14px] select-none rounded-xl ring-1 ring-border overflow-hidden">
+      <div ref={rootRef} className="flex flex-col w-full h-auto">
+        <Titlebar />
+        <Tabs
+          defaultValue="status"
+          className="flex flex-col w-full"
+        >
         {/* Top Tabs */}
-        <div className="px-4 pt-4">
+        <div className="px-4 pt-2">
           <TabsList className="h-8 justify-start rounded-none bg-transparent p-0 flex gap-1">
-            <TabsTrigger value="status" className="data-[state=active]:bg-card data-[state=active]:border data-[state=active]:border-b-transparent h-8 rounded-t-md px-4 border border-transparent">
+            <TabsTrigger
+              value="status"
+              className="data-[state=active]:bg-card data-[state=active]:border data-[state=active]:border-b-transparent h-8 rounded-t-md px-4 border border-transparent"
+            >
               Download status
             </TabsTrigger>
-            <TabsTrigger value="speed" className="data-[state=active]:bg-card data-[state=active]:border data-[state=active]:border-b-transparent h-8 rounded-t-md px-4 border border-transparent">
+            <TabsTrigger
+              value="speed"
+              className="data-[state=active]:bg-card data-[state=active]:border data-[state=active]:border-b-transparent h-8 rounded-t-md px-4 border border-transparent"
+            >
               Speed Limiter
             </TabsTrigger>
-            <TabsTrigger value="options" className="data-[state=active]:bg-card data-[state=active]:border data-[state=active]:border-b-transparent h-8 rounded-t-md px-4 border border-transparent">
+            <TabsTrigger
+              value="options"
+              className="data-[state=active]:bg-card data-[state=active]:border data-[state=active]:border-b-transparent h-8 rounded-t-md px-4 border border-transparent"
+            >
               Options on completion
             </TabsTrigger>
           </TabsList>
         </div>
 
-        <TabsContent value="status" className="flex flex-col p-4 m-0 bg-card/30 border-t">
+        <TabsContent
+          value="status"
+          className="flex flex-col p-4 m-0 bg-card/30 border-t"
+        >
           {/* Main Info Box with background progress */}
           <div className="border bg-card rounded-xl mb-4 shadow-sm relative overflow-hidden shrink-0">
             {/* Background progress fill */}
-            <div 
-              className="absolute inset-y-0 left-0 bg-emerald-500/15 transition-all duration-300 ease-out pointer-events-none" 
-              style={{ width: `${download.progress}%` }} 
+            <div
+              className="absolute inset-y-0 left-0 bg-emerald-500/15 pointer-events-none transition-all duration-100 ease-linear"
+              style={{ width: `${pct}%` }}
             />
-            
+
             <div className="p-4 pb-5 relative">
               {/* URL */}
-              <div className="mb-2 text-[12px] truncate opacity-90 tracking-wide font-medium" title={download.url}>
+              <div
+                className="mb-3 text-[12px] truncate text-muted-foreground tracking-[0.01em] font-medium"
+                title={download.url}
+              >
                 {download.url}
               </div>
 
               {/* Grid */}
-              <div className="grid grid-cols-[130px_1fr] gap-y-1.5 items-center">
-                <div className="text-muted-foreground">Status</div>
+              <div className="grid grid-cols-[130px_1fr] gap-y-2 items-center">
+                <div className="text-muted-foreground font-medium">Status</div>
                 <div className={isActive ? "text-blue-500 font-medium" : ""}>
-                  {download.status === "downloading" ? "Receiving data..." : download.status}
+                  {download.status === "downloading"
+                    ? "Receiving data..."
+                    : download.status}
                 </div>
 
-                <div className="text-muted-foreground">File size</div>
+                <div className="text-muted-foreground font-medium">
+                  File size
+                </div>
                 <div>{formatBytes(download.totalSize)}</div>
 
-                <div className="text-muted-foreground">Downloaded</div>
+                <div className="text-muted-foreground font-medium">
+                  Downloaded
+                </div>
                 <div>
                   {formatBytes(download.downloadedBytes)}
                   <span className="ml-2 text-muted-foreground">({pct} %)</span>
                 </div>
 
-                <div className="text-muted-foreground">Transfer rate</div>
+                <div className="text-muted-foreground font-medium">
+                  Transfer rate
+                </div>
                 <div>{isActive ? formatSpeed(download.speedBps) : "—"}</div>
 
-                <div className="text-muted-foreground">Time left</div>
+                <div className="text-muted-foreground font-medium">
+                  Time left
+                </div>
                 <div>{isActive ? formatEta(download) : "—"}</div>
 
-                <div className="text-muted-foreground">Resume capability</div>
+                <div className="text-muted-foreground font-medium">
+                  Resume capability
+                </div>
                 <div>Yes</div>
               </div>
             </div>
@@ -194,16 +307,38 @@ export default function InstanceView() {
 
           {/* Action Buttons */}
           <div className="flex justify-between items-center mb-4 shrink-0">
-            <Button variant="outline" className="w-[120px] bg-card" onClick={() => setShowDetails(!showDetails)}>
+            <Button
+              variant="outline"
+              className="w-[120px] bg-card"
+              onClick={() => setShowDetails(!showDetails)}
+            >
               {showDetails ? "<< Hide details" : "Show details >>"}
             </Button>
             <div className="flex gap-3">
               {isActive ? (
-                <Button variant="outline" className="w-[100px] bg-card" onClick={() => act("pause")}>Pause</Button>
+                <Button
+                  variant="outline"
+                  className="w-[100px] bg-card"
+                  onClick={() => act("pause")}
+                >
+                  Pause
+                </Button>
               ) : (
-                <Button variant="outline" className="w-[100px] bg-card" onClick={() => act("resume")}>Resume</Button>
+                <Button
+                  variant="outline"
+                  className="w-[100px] bg-card"
+                  onClick={() => act("resume")}
+                >
+                  Resume
+                </Button>
               )}
-              <Button variant="outline" className="w-[100px] bg-card" onClick={() => act("cancel")}>Cancel</Button>
+              <Button
+                variant="outline"
+                className="w-[100px] bg-card"
+                onClick={() => act("cancel")}
+              >
+                Cancel
+              </Button>
             </div>
           </div>
 
@@ -223,8 +358,8 @@ export default function InstanceView() {
                     style={{ left: `${seg.left}%`, width: `${seg.width}%` }}
                   >
                     {/* Inner progress of this chunk */}
-                    <div 
-                      className="h-full bg-blue-500 transition-all duration-300"
+                    <div
+                      className="h-full bg-blue-500 transition-all duration-100 ease-linear"
                       style={{ width: `${seg.progressWidth}%` }}
                     />
                   </div>
@@ -241,14 +376,25 @@ export default function InstanceView() {
                 </div>
                 <div className="flex flex-col">
                   {download.workerSnapshots.map((w, i) => (
-                    <div 
-                      key={w.connectionId} 
+                    <div
+                      key={w.connectionId}
                       className={`grid grid-cols-[40px_120px_100px_1fr] gap-4 px-3 py-1.5 text-[12px] items-center ${i % 2 === 0 ? "bg-white/[0.02]" : ""}`}
                     >
-                      <div className="text-muted-foreground">{w.connectionId}</div>
-                      <div>{(w.transferredBytes / 1024).toLocaleString(undefined, { maximumFractionDigits: 0 })} KB</div>
-                      <div className="text-muted-foreground font-medium">{w.speedBps > 0 ? formatSpeed(w.speedBps) : "—"}</div>
-                      <div className="text-muted-foreground">{workerStateLabel(w.state)}</div>
+                      <div className="text-muted-foreground">
+                        {w.connectionId}
+                      </div>
+                      <div>
+                        {(w.transferredBytes / 1024).toLocaleString(undefined, {
+                          maximumFractionDigits: 0,
+                        })}{" "}
+                        KB
+                      </div>
+                      <div className="text-muted-foreground font-medium">
+                        {w.speedBps > 0 ? formatSpeed(w.speedBps) : "—"}
+                      </div>
+                      <div className="text-muted-foreground">
+                        {workerStateLabel(w.state)}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -265,6 +411,7 @@ export default function InstanceView() {
           Options on completion (Placeholder)
         </TabsContent>
       </Tabs>
+      </div>
     </div>
   );
 }

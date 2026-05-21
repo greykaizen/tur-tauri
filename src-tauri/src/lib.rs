@@ -394,9 +394,11 @@ async fn open_instance_window(app: AppHandle, state: State<'_, AppState>, task_i
         WebviewUrl::App("index.html".into()),
     )
     .title(format!("Tur — {task_title}"))
-    .inner_size(728.0, 428.0)
-    .min_inner_size(600.0, 200.0)
+    .inner_size(728.0, 478.0)
+    .min_inner_size(600.0, 250.0)
     .resizable(true)
+    .decorations(false)
+    .transparent(true)
     .build()
     .map_err(|e| format!("failed to create download window: {e}"))?;
 
@@ -406,6 +408,53 @@ async fn open_instance_window(app: AppHandle, state: State<'_, AppState>, task_i
 #[tauri::command]
 fn resize_instance_window(window: tauri::Window, width: f64, height: f64) {
     let _ = window.set_size(tauri::LogicalSize::new(width, height));
+}
+
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
+#[tauri::command]
+fn open_confirmation_window(app: tauri::AppHandle, id: Option<String>) -> Result<(), String> {
+    let window_id = id.unwrap_or_else(|| {
+        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis().to_string()
+    });
+    let label = format!("download-confirmation:{window_id}");
+    
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
+        .title("Tur — Download File Info")
+        .inner_size(500.0, 400.0)
+        .min_inner_size(400.0, 280.0)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .build()
+        .map_err(|e| format!("failed to create confirmation window: {e}"))?;
+        
+    Ok(())
+}
+
+#[tauri::command]
+fn open_completion_window(app: tauri::AppHandle, task_id: String) -> Result<(), String> {
+    let label = format!("download-completion:{task_id}");
+    
+    // Prevent spawning multiple completion windows for the same task
+    if app.get_webview_window(&label).is_some() {
+        return Ok(());
+    }
+    
+    WebviewWindowBuilder::new(&app, &label, WebviewUrl::App("index.html".into()))
+        .title("Tur — Download complete")
+        .inner_size(400.0, 310.0)
+        .min_inner_size(400.0, 310.0)
+        .resizable(false)
+        .decorations(false)
+        .transparent(true)
+        .build()
+        .map_err(|e| format!("failed to create completion window: {e}"))?;
+        
+    Ok(())
 }
 
 #[tauri::command]
@@ -808,6 +857,8 @@ fn persist_snapshots(
 fn derive_filename(url: &str) -> String {
     url.split('/')
         .next_back()
+        .map(|s| s.split('?').next().unwrap_or(s))
+        .map(|s| s.split('#').next().unwrap_or(s))
         .filter(|segment| !segment.is_empty())
         .unwrap_or("download.bin")
         .to_string()
@@ -914,15 +965,22 @@ pub fn run() {
                     std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
                 ))?;
 
-            let _tray = TrayIconBuilder::new()
+            let mut tray_builder = TrayIconBuilder::with_id("main")
                 .tooltip("Tur Download Manager")
-                .menu(&menu)
-                .on_menu_event(|app_handle, event| {
+                .menu(&menu);
+            if let Some(icon) = app.default_window_icon() {
+                tray_builder = tray_builder.icon(icon.clone());
+            }
+            let _tray = tray_builder
+                .on_menu_event(|app_handle: &tauri::AppHandle, event: tauri::menu::MenuEvent| {
                     match event.id().as_ref() {
                         "show" => {
                             if let Some(window) = app_handle.get_webview_window("main") {
                                 let _ = window.show();
                                 let _ = window.set_focus();
+                            }
+                            if let Some(tray) = app_handle.tray_by_id("main") {
+                                let _ = tray.set_visible(false);
                             }
                         }
                         "new_download" => {
@@ -930,6 +988,9 @@ pub fn run() {
                                 let _ = window.show();
                                 let _ = window.set_focus();
                                 let _ = app_handle.emit("focus-add-download", ());
+                            }
+                            if let Some(tray) = app_handle.tray_by_id("main") {
+                                let _ = tray.set_visible(false);
                             }
                         }
                         "quit" => {
@@ -943,6 +1004,8 @@ pub fn run() {
                     std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
                 ))?;
 
+            let _ = _tray.set_visible(false);
+
             // Close-to-tray: hide main window instead of quitting
             if let Some(window) = app.get_webview_window("main") {
                 let window_clone = window.clone();
@@ -950,6 +1013,9 @@ pub fn run() {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
                         let _ = window_clone.hide();
+                        if let Some(tray) = window_clone.app_handle().tray_by_id("main") {
+                            let _ = tray.set_visible(true);
+                        }
                     }
                 });
             }
@@ -961,6 +1027,9 @@ pub fn run() {
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
+                if let Some(tray) = window.app_handle().tray_by_id("main") {
+                    let _ = tray.set_visible(false);
+                }
             }
         }))
         .plugin(tauri_plugin_autostart::init(
@@ -986,7 +1055,10 @@ pub fn run() {
             get_download,
             list_downloads,
             open_instance_window,
-            resize_instance_window
+            resize_instance_window,
+            quit_app,
+            open_confirmation_window,
+            open_completion_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
