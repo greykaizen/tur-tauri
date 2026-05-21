@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "Tur",
-        "width": 1180,
-        "height": 780,
+        "width": 880,
+        "height": 650,
         "minWidth": 1040,
         "minHeight": 680,
         "resizable": true

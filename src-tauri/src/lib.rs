@@ -395,12 +395,17 @@ async fn open_instance_window(app: AppHandle, state: State<'_, AppState>, task_i
     )
     .title(format!("Tur — {task_title}"))
     .inner_size(728.0, 428.0)
-    .min_inner_size(600.0, 350.0)
+    .min_inner_size(600.0, 200.0)
     .resizable(true)
     .build()
     .map_err(|e| format!("failed to create download window: {e}"))?;
 
     Ok(())
+}
+
+#[tauri::command]
+fn resize_instance_window(window: tauri::Window, width: f64, height: f64) {
+    let _ = window.set_size(tauri::LogicalSize::new(width, height));
 }
 
 #[tauri::command]
@@ -980,7 +985,8 @@ pub fn run() {
             open_download_file,
             get_download,
             list_downloads,
-            open_instance_window
+            open_instance_window,
+            resize_instance_window
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -9,9 +9,10 @@ import "./App.css";
 // - Main window label: "main"  → renders <App />
 // - Instance window label: "download-instance:{taskId}"  → renders <InstanceView />
 function Root() {
-  const label = getCurrentWindow().label;
+  const label = getCurrentWindow()?.label || "";
+  const params = new URLSearchParams(window.location.search);
 
-  if (label.startsWith("download-instance:")) {
+  if (label.startsWith("download-instance:") || params.get("view") === "instance") {
     return <InstanceView />;
   }
 
