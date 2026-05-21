@@ -1,10 +1,10 @@
 [package]
 name = "tur-tauri"
-version = "0.3.0"
+version = "0.5.0"
 description = "Tur desktop GUI powered by tur-rs"
 authors = ["greykaizen"]
 license = "MIT"
-repository = "https://github.com/greykaizen/tur"
+repository = "https://github.com/greykaizen/tur-tauri"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
