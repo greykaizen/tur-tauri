@@ -24,3 +24,4 @@ dist-ssr
 *.sw?
 .agents/
 tasks/
+src-tauri/.cargo/
