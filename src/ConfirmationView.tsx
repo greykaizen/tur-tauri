@@ -73,6 +73,7 @@ export default function ConfirmationView() {
   const [filename, setFilename] = useState("");
   const [useAuth, setUseAuth] = useState(false);
   const [user, setUser] = useState("");
+  const [password, setPassword] = useState("");
   const [engine, setEngine] = useState("tur");
   const [plugins, setPlugins] = useState<string[]>([]);
 
