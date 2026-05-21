@@ -425,7 +425,6 @@ async fn open_instance_window(app: AppHandle, state: State<'_, AppState>, task_i
     .min_inner_size(600.0, 250.0)
     .resizable(true)
     .decorations(false)
-    .transparent(true)
     .build()
     .map_err(|e| format!("failed to create download window: {e}"))?;
 
@@ -455,7 +454,6 @@ fn open_confirmation_window(app: tauri::AppHandle, id: Option<String>) -> Result
         .min_inner_size(400.0, 280.0)
         .resizable(false)
         .decorations(false)
-        .transparent(true)
         .build()
         .map_err(|e| format!("failed to create confirmation window: {e}"))?;
         
@@ -477,7 +475,6 @@ fn open_completion_window(app: tauri::AppHandle, task_id: String) -> Result<(), 
         .min_inner_size(400.0, 310.0)
         .resizable(false)
         .decorations(false)
-        .transparent(true)
         .build()
         .map_err(|e| format!("failed to create completion window: {e}"))?;
         
