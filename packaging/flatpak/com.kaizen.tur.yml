@@ -48,7 +48,7 @@ modules:
       - type: git
         url: https://github.com/greykaizen/tur-tauri
         tag: v0.5.0
-        commit: b4332647e75d662e0112db8ffd355d6a645598c4
+        commit: dcc9722e26e50a18c7670aed2e861e81856fae5c
       # Generated offline sources — run before submitting to Flathub:
       # flatpak-cargo-generator.py src-tauri/Cargo.lock -o cargo-sources.json
       # flatpak-node-generator npm package-lock.json -o node-sources.json
