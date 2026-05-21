@@ -31,7 +31,7 @@
     "targets": "all",
     "shortDescription": "A sleek, multi-engine download manager",
     "longDescription": "Tur is a modern download manager with a native Rust core, built to be lightweight, fast, and highly customizable with support for external engines like aria2c.",
-    "category": "Network",
+    "category": "Utility",
     "publisher": "Kaizen",
     "copyright": "Copyright © 2026 Kaizen",
     "icon": [
