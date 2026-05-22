@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="src-tauri/icons/128x128.png" alt="Tur Logo" width="120" />
+  <img src="src-tauri/icons/128x128.png" alt="Tur Logo" width="100" />
   <h1>Tur</h1>
   <p><strong>A sleek, highly concurrent, multi-engine download manager.</strong></p>
 
@@ -27,9 +27,9 @@ Say goodbye to bloated, ad-filled download managers. Tur is fully open-source, d
 ## 📸 Screenshots
 
 <div align="center">
-  <img alt="Tur Main Window" src="docs/images/main_window.png" width="100%" style="max-width: 800px; height: auto; border-radius: 8px; margin-bottom: 20px;" />
+  <img alt="Tur Main Window" src="docs/images/main_window.png" width="80%" style="max-width: 800px; height: auto; border-radius: 8px; margin-bottom: 20px;" />
   <br />
-  <img alt="Tur Download Instance View" src="docs/images/download_instance.png" width="100%" style="max-width: 600px; height: auto; border-radius: 8px;" />
+  <img alt="Tur Download Instance View" src="docs/images/download_instance.png" width="55%" style="max-width: 600px; height: auto; border-radius: 8px;" />
   <p><em>Detailed download instance view with real-time speed and progress tracking.</em></p>
 </div>
 
