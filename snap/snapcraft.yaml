@@ -1,0 +1,65 @@
+name: tur
+base: core24
+version: '0.5.0'
+summary: Tur — A sleek, multi-engine download manager
+description: |
+  Tur is a fast, multi-engine download manager featuring a modern UI powered by Tauri.
+  It supports resuming, segmented downloads, and rich integrations.
+grade: stable
+confinement: strict
+
+apps:
+  tur:
+    command: usr/bin/tur-tauri
+    desktop: usr/share/applications/tur.desktop
+    extensions: [gnome]
+    plugs:
+      - network
+      - network-bind
+      - home
+      - removable-media
+      - audio-playback
+
+parts:
+  tur:
+    plugin: nil
+    source: .
+    build-packages:
+      - curl
+      - wget
+      - pkg-config
+      - libwebkit2gtk-4.1-dev
+      - libayatana-appindicator3-dev
+      - librsvg2-dev
+      - nodejs
+      - npm
+    override-build: |
+      # Install Rust
+      curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      export PATH="$HOME/.cargo/bin:$PATH"
+      
+      # Install Javascript dependencies and build the app
+      npm install -g yarn
+      yarn install
+      yarn tauri build --no-bundle
+      
+      # Install the binary
+      mkdir -p $SNAPCRAFT_PART_INSTALL/usr/bin
+      cp src-tauri/target/release/tur-tauri $SNAPCRAFT_PART_INSTALL/usr/bin/
+      
+      # Install the desktop file and icons
+      mkdir -p $SNAPCRAFT_PART_INSTALL/usr/share/applications
+      mkdir -p $SNAPCRAFT_PART_INSTALL/usr/share/icons/hicolor/512x512/apps
+      
+      cp src-tauri/icons/512x512.png $SNAPCRAFT_PART_INSTALL/usr/share/icons/hicolor/512x512/apps/tur.png
+      
+      cat <<EOF > $SNAPCRAFT_PART_INSTALL/usr/share/applications/tur.desktop
+      [Desktop Entry]
+      Name=Tur
+      Comment=A sleek, multi-engine download manager
+      Exec=tur
+      Icon=tur
+      Terminal=false
+      Type=Application
+      Categories=Network;FileTransfer;
+      EOF
