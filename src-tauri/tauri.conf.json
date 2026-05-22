@@ -4,9 +4,9 @@
   "version": "0.5.0",
   "identifier": "com.kaizen.tur",
   "build": {
-    "beforeDevCommand": "bun run web:dev",
+    "beforeDevCommand": "yarn run web:dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run web:build",
+    "beforeBuildCommand": "yarn run web:build",
     "frontendDist": "../dist"
   },
   "app": {

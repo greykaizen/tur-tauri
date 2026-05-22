@@ -1,10 +1,11 @@
 name: tur
 base: core24
 version: '0.5.0'
+license: GPL-3.0-or-later
 summary: Tur — A sleek, multi-engine download manager
 description: |
   Tur is a fast, multi-engine download manager featuring a modern UI powered by Tauri.
-  It supports resuming, segmented downloads, and rich integrations.
+  This is the official native GUI frontend for the tur-rs Rust engine.
 grade: stable
 confinement: strict
 

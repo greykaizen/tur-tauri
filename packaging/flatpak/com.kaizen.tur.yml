@@ -1,6 +1,6 @@
 app-id: com.kaizen.tur
 runtime: org.gnome.Platform
-runtime-version: '24.08'
+runtime-version: '50'
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
@@ -12,6 +12,8 @@ finish-args:
   - --socket=wayland
   # Network access for downloading
   - --share=network
+  # IPC access for WebKitGTK multi-process rendering (fixes invisible window & MIT-SHM crashes)
+  - --share=ipc
   # GPU acceleration for webview
   - --device=dri
   # DBus for notifications and tray
@@ -26,15 +28,23 @@ build-options:
     CARGO_NET_OFFLINE: 'true'
     npm_config_nodedir: /usr/lib/sdk/node20
 modules:
+  - shared-modules/libayatana-appindicator/libayatana-appindicator-gtk3.json
   - name: tur-tauri
     buildsystem: simple
     build-commands:
+      # Strip the Corepack packageManager field so it doesn't attempt to download bun offline
+      - sed -i '/"packageManager":/d' package.json
+      # Use a deterministic Yarn Classic offline mirror inside the sandbox.
+      - printf 'yarn-offline-mirror "./flatpak-node/yarn-mirror"\nyarn-offline-mirror-pruning false\n' > .yarnrc
       # Install JS dependencies (offline — requires generated node-sources.json)
-      - yarn install --offline
-      # Build frontend
-      - node_modules/.bin/vite build
-      # Build Tauri/Rust binary
-      - cargo build --release --manifest-path src-tauri/Cargo.toml
+      - yarn install --offline --frozen-lockfile --non-interactive
+      # Patch tauri.conf.json to use yarn instead of bun since we stripped bun
+      - sed -i 's/"bun run/"yarn run/g' src-tauri/tauri.conf.json
+      # Patch the Tray ID from "main" to the flatpak app ID so the system tray icon renders correctly
+      - sed -i 's/TrayIconBuilder::with_id("main")/TrayIconBuilder::with_id("com.kaizen.tur")/g' src-tauri/src/lib.rs
+      - sed -i 's/tray_by_id("main")/tray_by_id("com.kaizen.tur")/g' src-tauri/src/lib.rs
+      # Build the Tauri app natively using the official CLI (embeds frontend assets properly)
+      - node_modules/.bin/tauri build --no-bundle
       # Install binary
       - install -Dm755 src-tauri/target/release/tur-tauri /app/bin/tur
       # Install icons
@@ -50,8 +60,8 @@ modules:
         url: https://github.com/greykaizen/tur-tauri
         tag: v0.5.0
         commit: 0a50039fb6c8a39b9fb1ab71a48e22fc1f9a14a3
-      # Generated offline sources — run before submitting to Flathub:
-      # flatpak-cargo-generator.py src-tauri/Cargo.lock -o cargo-sources.json
-      # flatpak-node-generator npm package-lock.json -o node-sources.json
+      # Generated offline sources for local Flatpak builds.
       - node-sources.json
       - cargo-sources.json
+      - type: file
+        path: yarn.lock

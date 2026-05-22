@@ -3,7 +3,7 @@ Version:        0.5.0
 Release:        1%{?dist}
 Summary:        Tur — A sleek, multi-engine download manager
 
-License:        MIT
+License:        GPLv3
 URL:            https://github.com/greykaizen/tur-tauri
 Source0:        %{url}/archive/refs/tags/v%{version}.tar.gz
 
@@ -21,7 +21,7 @@ Requires:       libayatana-appindicator
 
 %description
 Tur is a fast, multi-engine download manager featuring a modern UI powered by Tauri.
-It supports resuming, segmented downloads, and rich integrations.
+This is the official native GUI frontend for the tur-rs Rust engine.
 
 %prep
 %setup -q
