@@ -5,11 +5,11 @@
   <name>Tur</name>
   <summary>A sleek, multi-engine download manager</summary>
 
-  <metadata_license>MIT</metadata_license>
-  <project_license>MIT</project_license>
+  <metadata_license>FSFAP</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
 
   <developer id="com.kaizen">
-    <name>greykaizen</name>
+    <name>Kaizen</name>
   </developer>
 
   <description>
@@ -30,6 +30,17 @@
     </ul>
   </description>
 
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/greykaizen/tur-tauri/main/docs/images/main_window.png</image>
+      <caption>Tur main window showing downloads</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/greykaizen/tur-tauri/main/docs/images/download_instance.png</image>
+      <caption>Detailed download instance view</caption>
+    </screenshot>
+  </screenshots>
+
   <launchable type="desktop-id">com.kaizen.tur.desktop</launchable>
 
   <url type="homepage">https://github.com/greykaizen/tur-tauri</url>
@@ -41,7 +52,7 @@
   </categories>
 
   <provides>
-    <binary>tur-tauri</binary>
+    <binary>tur</binary>
   </provides>
 
   <releases>

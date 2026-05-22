@@ -1,7 +1,7 @@
 [Desktop Entry]
 Name=Tur
 Comment=A sleek, multi-engine download manager
-Exec=tur-tauri %U
+Exec=tur %U
 Icon=com.kaizen.tur
 Terminal=false
 Type=Application
