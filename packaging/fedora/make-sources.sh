@@ -10,8 +10,8 @@ vendor_dir="$out_dir/vendor"
 cargo_archive="$out_dir/cargo-vendor-$version.tar.zst"
 web_archive="$out_dir/web-dist-$version.tar.zst"
 
-yarn install --frozen-lockfile
-yarn web:build
+# npm install
+# npm run web:build
 
 rm -rf "$vendor_dir"
 cargo vendor --locked "$vendor_dir" --manifest-path src-tauri/Cargo.toml >/dev/null

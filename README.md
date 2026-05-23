@@ -38,7 +38,11 @@ Say goodbye to bloated, ad-filled download managers. Tur is fully open-source, d
 You can always find the latest pre-compiled binaries on the [Releases](https://github.com/greykaizen/tur-tauri/releases) page.
 
 ### 🐧 Linux
-- **Flatpak (Flathub)**: The official flatpak is available on Flathub! Install it via your app store or run: `flatpak install flathub com.kaizen.tur`
+- **Fedora (COPR)**: Officially published on Fedora COPR! Install it effortlessly:
+  ```bash
+  sudo dnf copr enable greykaizen/tur
+  sudo dnf install tur-tauri
+  ```
 - **Arch Linux (AUR)**: Officially published on the AUR! Install it instantly using any AUR helper: `yay -S tur-tauri` or `paru -S tur-tauri`
 - **AppImage / .deb / .rpm**: Download directly from the Releases page.
 

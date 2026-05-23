@@ -42,8 +42,8 @@ parts:
       - libgtk-3-dev
       - librsvg2-dev
       - libssl-dev
-      - nodejs
-      - npm
+    build-snaps:
+      - node/22/stable
     stage-packages:
       - libwebkit2gtk-4.1-0
       - libayatana-appindicator3-1
