@@ -42,8 +42,6 @@ parts:
       - libgtk-3-dev
       - librsvg2-dev
       - libssl-dev
-    build-snaps:
-      - node/22/stable
     stage-packages:
       - libwebkit2gtk-4.1-0
       - libayatana-appindicator3-1
@@ -52,7 +50,9 @@ parts:
     override-build: |
       export RUSTUP_HOME="$CRAFT_PART_BUILD/.rustup"
       export CARGO_HOME="$CRAFT_PART_BUILD/.cargo"
-      export PATH="$CARGO_HOME/bin:$PATH"
+      
+      curl -fsSL https://nodejs.org/dist/v20.12.2/node-v20.12.2-linux-x64.tar.xz | tar -xJ
+      export PATH="$CRAFT_PART_BUILD/node-v20.12.2-linux-x64/bin:$CARGO_HOME/bin:$PATH"
 
       curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
       npm install -g yarn
