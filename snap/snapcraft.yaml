@@ -1,6 +1,6 @@
 name: tur-tauri
 base: core24
-version: '0.5.0'
+version: '0.5.1'
 license: GPL-3.0-or-later
 summary: Tur — A sleek, multi-engine download manager
 description: |
@@ -11,9 +11,9 @@ confinement: strict
 
 apps:
   tur-tauri:
-    command: usr/bin/tur-tauri
-    common-id: com.kaizen.tur
-    desktop: usr/share/applications/com.kaizen.tur.desktop
+    command: usr/bin/tur
+    common-id: io.github.greykaizen.tur
+    desktop: usr/share/applications/io.github.greykaizen.tur.desktop
     extensions: [gnome]
     plugs:
       - desktop
@@ -41,6 +41,7 @@ parts:
       - libayatana-appindicator3-dev
       - libgtk-3-dev
       - librsvg2-dev
+      - libssl-dev
       - nodejs
       - npm
     stage-packages:
@@ -60,9 +61,9 @@ parts:
       cargo build --release --locked --manifest-path src-tauri/Cargo.toml
 
       mkdir -p $SNAPCRAFT_PART_INSTALL/usr/bin
-      cp src-tauri/target/release/tur-tauri $SNAPCRAFT_PART_INSTALL/usr/bin/
+      cp src-tauri/target/release/tur $SNAPCRAFT_PART_INSTALL/usr/bin/
 
-      install -Dm644 src-tauri/icons/512x512.png \
-        $SNAPCRAFT_PART_INSTALL/usr/share/icons/hicolor/512x512/apps/com.kaizen.tur.png
-      install -Dm644 packaging/fedora/com.kaizen.tur.desktop \
-        $SNAPCRAFT_PART_INSTALL/usr/share/applications/com.kaizen.tur.desktop
+      install -Dm644 src-tauri/icons/icon.png \
+        $SNAPCRAFT_PART_INSTALL/usr/share/icons/hicolor/512x512/apps/io.github.greykaizen.tur.png
+      install -Dm644 packaging/fedora/io.github.greykaizen.tur.desktop \
+        $SNAPCRAFT_PART_INSTALL/usr/share/applications/io.github.greykaizen.tur.desktop
