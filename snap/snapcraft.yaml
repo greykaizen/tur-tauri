@@ -1,4 +1,4 @@
-name: tur
+name: tur-tauri
 base: core24
 version: '0.5.0'
 license: GPL-3.0-or-later
@@ -10,11 +10,17 @@ grade: stable
 confinement: strict
 
 apps:
-  tur:
+  tur-tauri:
     command: usr/bin/tur-tauri
-    desktop: usr/share/applications/tur.desktop
+    common-id: com.kaizen.tur
+    desktop: usr/share/applications/com.kaizen.tur.desktop
     extensions: [gnome]
     plugs:
+      - desktop
+      - desktop-legacy
+      - wayland
+      - x11
+      - opengl
       - network
       - network-bind
       - home
@@ -22,45 +28,41 @@ apps:
       - audio-playback
 
 parts:
-  tur:
+  tur-tauri:
     plugin: nil
     source: .
     build-packages:
+      - build-essential
       - curl
-      - wget
       - pkg-config
+      - rustc
+      - cargo
       - libwebkit2gtk-4.1-dev
       - libayatana-appindicator3-dev
+      - libgtk-3-dev
       - librsvg2-dev
       - nodejs
       - npm
+    stage-packages:
+      - libwebkit2gtk-4.1-0
+      - libayatana-appindicator3-1
+      - libgtk-3-0
+      - librsvg2-2
     override-build: |
-      # Install Rust
+      export RUSTUP_HOME="$CRAFT_PART_BUILD/.rustup"
+      export CARGO_HOME="$CRAFT_PART_BUILD/.cargo"
+      export PATH="$CARGO_HOME/bin:$PATH"
+
       curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-      export PATH="$HOME/.cargo/bin:$PATH"
-      
-      # Install Javascript dependencies and build the app
       npm install -g yarn
-      yarn install
-      yarn tauri build --no-bundle
-      
-      # Install the binary
+      yarn install --frozen-lockfile
+      yarn web:build
+      cargo build --release --locked --manifest-path src-tauri/Cargo.toml
+
       mkdir -p $SNAPCRAFT_PART_INSTALL/usr/bin
       cp src-tauri/target/release/tur-tauri $SNAPCRAFT_PART_INSTALL/usr/bin/
-      
-      # Install the desktop file and icons
-      mkdir -p $SNAPCRAFT_PART_INSTALL/usr/share/applications
-      mkdir -p $SNAPCRAFT_PART_INSTALL/usr/share/icons/hicolor/512x512/apps
-      
-      cp src-tauri/icons/512x512.png $SNAPCRAFT_PART_INSTALL/usr/share/icons/hicolor/512x512/apps/tur.png
-      
-      cat <<EOF > $SNAPCRAFT_PART_INSTALL/usr/share/applications/tur.desktop
-      [Desktop Entry]
-      Name=Tur
-      Comment=A sleek, multi-engine download manager
-      Exec=tur
-      Icon=tur
-      Terminal=false
-      Type=Application
-      Categories=Network;FileTransfer;
-      EOF
+
+      install -Dm644 src-tauri/icons/512x512.png \
+        $SNAPCRAFT_PART_INSTALL/usr/share/icons/hicolor/512x512/apps/com.kaizen.tur.png
+      install -Dm644 packaging/fedora/com.kaizen.tur.desktop \
+        $SNAPCRAFT_PART_INSTALL/usr/share/applications/com.kaizen.tur.desktop

@@ -1,0 +1,3 @@
+libdbusmenu_glib_la-dbus-menu-clean.xml.lo: dbus-menu-clean.xml.c \
+ /usr/include/stdc-predef.h
+/usr/include/stdc-predef.h:

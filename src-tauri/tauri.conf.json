@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Tur",
-  "version": "0.5.0",
-  "identifier": "com.kaizen.tur",
+  "productName": "tur",
+  "version": "0.5.1",
+  "identifier": "io.github.greykaizen.tur",
   "build": {
     "beforeDevCommand": "yarn run web:dev",
     "devUrl": "http://localhost:1420",

@@ -1,0 +1,38 @@
+[package]
+name = "tur-tauri"
+version = "0.5.0"
+description = "Tur desktop GUI powered by tur-rs"
+authors = ["greykaizen"]
+license = "GPL-3.0-or-later"
+repository = "https://github.com/greykaizen/tur-tauri"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "tur_tauri_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+url = { version = "2" }
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-autostart = "2.5.1"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2.5.1"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2.4.2"
+tauri-plugin-store = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "sync", "time", "fs"] }
+tur-rs = { git = "https://github.com/greykaizen/tur-rs", default-features = false }
+rusqlite = { version = "0.39.0", features = ["bundled"] }
+async-trait = "0.1.89"
+uuid = { version = "1.23.1", features = ["v4", "v7"] }

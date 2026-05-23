@@ -3,55 +3,64 @@ Version:        0.5.0
 Release:        1%{?dist}
 Summary:        Tur — A sleek, multi-engine download manager
 
-License:        GPLv3
+License:        GPL-3.0-or-later
 URL:            https://github.com/greykaizen/tur-tauri
-Source0:        %{url}/archive/refs/tags/v%{version}.tar.gz
+Source0:        %{url}/archive/refs/tags/v%{version}/tur-tauri-%{version}.tar.gz
+Source1:        cargo-vendor-%{version}.tar.zst
+Source2:        web-dist-%{version}.tar.zst
 
 BuildRequires:  cargo
-BuildRequires:  npm
-BuildRequires:  nodejs
-BuildRequires:  yarnpkg
+BuildRequires:  gcc
+BuildRequires:  rust
+BuildRequires:  desktop-file-utils
 BuildRequires:  webkit2gtk4.1-devel
 BuildRequires:  gtk3-devel
-BuildRequires:  libayatana-appindicator-devel
+BuildRequires:  libayatana-appindicator-gtk3-devel
 BuildRequires:  librsvg2-devel
 
 Requires:       webkit2gtk4.1
-Requires:       libayatana-appindicator
+Requires:       libayatana-appindicator-gtk3
+Requires:       gtk3
 
 %description
 Tur is a fast, multi-engine download manager featuring a modern UI powered by Tauri.
 This is the official native GUI frontend for the tur-rs Rust engine.
 
 %prep
-%setup -q
+%autosetup -n tur-tauri-%{version}
+tar --zstd -xf %{SOURCE1}
+tar --zstd -xf %{SOURCE2}
+mkdir -p .cargo
+cat > .cargo/config.toml <<'EOF'
+[source.crates-io]
+replace-with = "vendored-sources"
 
-%build
-yarnpkg install
-yarnpkg tauri build --no-bundle
-
-%install
-rm -rf $RPM_BUILD_ROOT
-install -D -m 755 src-tauri/target/release/tur-tauri $RPM_BUILD_ROOT%{_bindir}/tur-tauri
-install -D -m 644 src-tauri/icons/512x512.png $RPM_BUILD_ROOT%{_datadir}/icons/hicolor/512x512/apps/tur-tauri.png
-
-mkdir -p $RPM_BUILD_ROOT%{_datadir}/applications
-cat > $RPM_BUILD_ROOT%{_datadir}/applications/tur-tauri.desktop <<EOF
-[Desktop Entry]
-Name=Tur
-Comment=A sleek, multi-engine download manager
-Exec=tur-tauri
-Icon=tur-tauri
-Terminal=false
-Type=Application
-Categories=Network;FileTransfer;
+[source.vendored-sources]
+directory = "vendor"
 EOF
 
+%build
+cargo build --release --locked --frozen --offline --manifest-path src-tauri/Cargo.toml
+
+%install
+install -D -m 0755 src-tauri/target/release/tur-tauri %{buildroot}%{_bindir}/tur-tauri
+install -D -m 0644 src-tauri/icons/512x512.png %{buildroot}%{_datadir}/icons/hicolor/512x512/apps/com.kaizen.tur.png
+install -D -m 0644 packaging/fedora/com.kaizen.tur.desktop %{buildroot}%{_datadir}/applications/com.kaizen.tur.desktop
+install -D -m 0644 packaging/flatpak/com.kaizen.tur.metainfo.xml %{buildroot}%{_datadir}/metainfo/com.kaizen.tur.metainfo.xml
+
+desktop-file-validate %{buildroot}%{_datadir}/applications/com.kaizen.tur.desktop
+
+%check
+src-tauri/target/release/tur-tauri --help >/dev/null
+
 %files
+%license LICENSE
+%doc README.md
 %{_bindir}/tur-tauri
-%{_datadir}/applications/tur-tauri.desktop
-%{_datadir}/icons/hicolor/512x512/apps/tur-tauri.png
+%{_datadir}/applications/com.kaizen.tur.desktop
+%{_datadir}/icons/hicolor/512x512/apps/com.kaizen.tur.png
+%{_datadir}/metainfo/com.kaizen.tur.metainfo.xml
 
 %changelog
 * Fri May 22 2026 Kaizen <kaizen@example.com> - 0.5.0-1
-- Initial release
+- Initial COPR package

@@ -1,0 +1,17 @@
+# These are environment variables that effect the behavior of
+# libayatana-indicator's service manager and ayatana-indicator
+# service objects.  They turn off various robustness features
+# that make debugging difficult and are not recommended for
+# daily use.  Development use only!
+
+# To use: either copy or symbolicly link this file to the
+# Xsession dictory.  Specifically: /etc/X11/Xsession.d
+
+# Timeout after 1 minute
+export INDICATOR_SERVICE_SHUTDOWN_TIMEOUT=60000
+
+# If no one connects, still stay alive
+export INDICATOR_ALLOW_NO_WATCHERS=1
+
+# Don't restart the services if they crash
+export INDICATOR_SERVICE_RESTART_DISABLE=1

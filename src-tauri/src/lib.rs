@@ -913,7 +913,7 @@ pub fn run() {
                     std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
                 ))?;
 
-            let mut tray_builder = TrayIconBuilder::with_id("com.kaizen.tur")
+            let mut tray_builder = TrayIconBuilder::with_id("io.github.greykaizen.tur")
                 .tooltip("Tur Download Manager")
                 .menu(&menu);
             if let Some(icon) = app.default_window_icon() {
@@ -927,7 +927,7 @@ pub fn run() {
                                 let _ = window.show();
                                 let _ = window.set_focus();
                             }
-                            if let Some(tray) = app_handle.tray_by_id("com.kaizen.tur") {
+                            if let Some(tray) = app_handle.tray_by_id("io.github.greykaizen.tur") {
                                 let _ = tray.set_visible(false);
                             }
                         }
@@ -937,7 +937,7 @@ pub fn run() {
                                 let _ = window.set_focus();
                                 let _ = app_handle.emit("focus-add-download", ());
                             }
-                            if let Some(tray) = app_handle.tray_by_id("com.kaizen.tur") {
+                            if let Some(tray) = app_handle.tray_by_id("io.github.greykaizen.tur") {
                                 let _ = tray.set_visible(false);
                             }
                         }
@@ -961,7 +961,7 @@ pub fn run() {
                     if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
                         let _ = window_clone.hide();
-                        if let Some(tray) = window_clone.app_handle().tray_by_id("com.kaizen.tur") {
+                        if let Some(tray) = window_clone.app_handle().tray_by_id("io.github.greykaizen.tur") {
                             let _ = tray.set_visible(true);
                         }
                     }
@@ -975,7 +975,7 @@ pub fn run() {
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
-                if let Some(tray) = window.app_handle().tray_by_id("com.kaizen.tur") {
+                if let Some(tray) = window.app_handle().tray_by_id("io.github.greykaizen.tur") {
                     let _ = tray.set_visible(false);
                 }
             }
