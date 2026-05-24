@@ -28,6 +28,5 @@ src-tauri/.cargo/
 
 # Flatpak Build Caches
 .flatpak-builder/
-packaging/
 repo/
 builddir/
