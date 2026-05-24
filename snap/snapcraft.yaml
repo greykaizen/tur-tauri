@@ -45,8 +45,6 @@ parts:
     stage-packages:
       - libwebkit2gtk-4.1-0
       - libayatana-appindicator3-1
-      - libgtk-3-0
-      - librsvg2-2
     override-build: |
       export RUSTUP_HOME="$CRAFT_PART_BUILD/.rustup"
       export CARGO_HOME="$CRAFT_PART_BUILD/.cargo"
