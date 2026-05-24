@@ -55,18 +55,18 @@ cargo build --release --locked --frozen --offline --manifest-path src-tauri/Carg
 %install
 install -D -m 0755 src-tauri/target/release/tur %{buildroot}%{_bindir}/tur-tauri
 install -D -m 0644 src-tauri/icons/icon.png %{buildroot}%{_datadir}/icons/hicolor/512x512/apps/io.github.greykaizen.tur.png
-install -D -m 0644 packaging/fedora/io.github.greykaizen.tur.desktop %{buildroot}%{_datadir}/applications/io.github.greykaizen.tur.desktop
-install -D -m 0644 packaging/flatpak/io.github.greykaizen.tur.metainfo.xml %{buildroot}%{_datadir}/metainfo/io.github.greykaizen.tur.metainfo.xml
+install -D -m 0644 packaging/shared/com.kaizen.tur.desktop %{buildroot}%{_datadir}/applications/com.kaizen.tur.desktop
+install -D -m 0644 packaging/shared/com.kaizen.tur.metainfo.xml %{buildroot}%{_datadir}/metainfo/com.kaizen.tur.metainfo.xml
 
-desktop-file-validate %{buildroot}%{_datadir}/applications/io.github.greykaizen.tur.desktop
+desktop-file-validate %{buildroot}%{_datadir}/applications/com.kaizen.tur.desktop
 
 %files
 %license LICENSE
 %doc README.md
 %{_bindir}/tur-tauri
-%{_datadir}/applications/io.github.greykaizen.tur.desktop
+%{_datadir}/applications/com.kaizen.tur.desktop
 %{_datadir}/icons/hicolor/512x512/apps/io.github.greykaizen.tur.png
-%{_datadir}/metainfo/io.github.greykaizen.tur.metainfo.xml
+%{_datadir}/metainfo/com.kaizen.tur.metainfo.xml
 
 %changelog
 * Fri May 22 2026 Kaizen <kaizen@example.com> - 0.5.0-1

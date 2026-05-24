@@ -1,5 +1,0 @@
-[Runtime]
-name=com.kaizen.tur.Debug
-
-[ExtensionOf]
-ref=app/com.kaizen.tur/x86_64/master

@@ -380,8 +380,12 @@ export default function App() {
           setNotifyOnFailure(savedNotifyOnFailure);
         }
 
-        const autostart = await isAutostartEnabled();
-        if (mounted) setAutostartEnabled(autostart);
+        try {
+          const autostart = await isAutostartEnabled();
+          if (mounted) setAutostartEnabled(autostart);
+        } catch {
+          console.warn("Autostart check failed (expected in snap sandbox)");
+        }
 
         const rows = await invoke<DownloadItem[]>("list_downloads");
         if (mounted)
@@ -511,6 +515,8 @@ export default function App() {
         await enableAutostart();
         setAutostartEnabled(true);
       }
+    } catch (err) {
+      console.warn("Failed to toggle autostart", err);
     } finally {
       setIsTogglingAutostart(false);
     }
