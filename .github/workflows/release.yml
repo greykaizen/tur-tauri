@@ -71,7 +71,7 @@ jobs:
         uses: bilelmoussaoui/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: tur.flatpak
-          manifest-path: packaging/flatpak/com.kaizen.tur.yml
+          manifest-path: packaging/flatpak/io.github.greykaizen.tur.yml
           cache-key: flatpak-builder-${{ github.sha }}
       - name: Upload Flatpak Release Asset
         uses: softprops/action-gh-release@v2
