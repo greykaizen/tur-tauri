@@ -55,6 +55,10 @@ parts:
       export PATH="$CRAFT_PART_BUILD/node-v22.22.3-linux-x64/bin:$CARGO_HOME/bin:$PATH"
 
       curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      
+      export CI=true
+      export NO_UPDATE_NOTIFIER=1
+      
       npm install -g yarn
       yarn install --frozen-lockfile
       yarn web:build
@@ -65,5 +69,5 @@ parts:
 
       install -Dm644 src-tauri/icons/icon.png \
         $SNAPCRAFT_PART_INSTALL/usr/share/icons/hicolor/512x512/apps/io.github.greykaizen.tur.png
-      install -Dm644 packaging/fedora/io.github.greykaizen.tur.desktop \
+      install -Dm644 packaging/flatpak/io.github.greykaizen.tur.desktop \
         $SNAPCRAFT_PART_INSTALL/usr/share/applications/io.github.greykaizen.tur.desktop
